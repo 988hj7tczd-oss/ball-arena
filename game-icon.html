@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="icon" width="512" height="512"></canvas>
+<script>
+const c = document.getElementById('icon');
+const ctx = c.getContext('2d');
+const cx = 256, cy = 256, r = 180;
+
+// 背景
+ctx.fillStyle = '#1a1a2e';
+ctx.fillRect(0, 0, 512, 512);
+
+// 外发光
+const glow = ctx.createRadialGradient(cx, cy, 140, cx, cy, r+40);
+glow.addColorStop(0, 'rgba(100,200,255,0.12)');
+glow.addColorStop(1, 'rgba(100,200,255,0)');
+ctx.fillStyle = glow;
+ctx.beginPath(); ctx.arc(cx, cy, r+40, 0, Math.PI*2); ctx.fill();
+
+// 球体径向渐变（蓝色系科技感）
+const grad = ctx.createRadialGradient(cx-40, cy-40, 20, cx, cy, r);
+grad.addColorStop(0, '#66ccff');
+grad.addColorStop(0.4, '#3399ee');
+grad.addColorStop(0.8, '#1a66cc');
+grad.addColorStop(1, '#0d3d8a');
+ctx.fillStyle = grad;
+ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.fill();
+
+// 外框
+ctx.strokeStyle = '#0a2d6a';
+ctx.lineWidth = 4;
+ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.stroke();
+
+// 高光（左上）
+ctx.fillStyle = 'rgba(255,255,255,0.3)';
+ctx.beginPath();
+ctx.ellipse(cx-60, cy-60, 55, 25, -0.5, 0, Math.PI*2);
+ctx.fill();
+
+// 高光小点
+ctx.fillStyle = 'rgba(255,255,255,0.45)';
+ctx.beginPath(); ctx.ellipse(cx-40, cy-70, 25, 10, -0.3, 0, Math.PI*2); ctx.fill();
+
+// 能量内核（旋转光圈）
+ctx.save();
+ctx.translate(cx, cy);
+const t = Date.now()/800;
+ctx.rotate(t);
+ctx.strokeStyle = 'rgba(255,220,60,0.7)';
+ctx.lineWidth = 5;
+ctx.beginPath(); ctx.arc(0, 0, 45, 0, Math.PI*2); ctx.stroke();
+ctx.strokeStyle = 'rgba(255,220,60,0.3)';
+ctx.lineWidth = 3;
+ctx.beginPath(); ctx.arc(0, 0, 60, 0, Math.PI*2); ctx.stroke();
+// 旋转星星
+ctx.fillStyle = 'rgba(255,220,60,0.5)';
+for(let i=0;i<4;i++){
+    const a = t + i*Math.PI/2;
+    ctx.beginPath();
+    ctx.arc(Math.cos(a)*50, Math.sin(a)*50, 5, 0, Math.PI*2);
+    ctx.fill();
+}
+ctx.restore();
+
+// 眼睛（左大眼）
+ctx.fillStyle = '#222';
+ctx.beginPath(); ctx.ellipse(cx-42, cy-18, 16, 20, 0, 0, Math.PI*2); ctx.fill();
+// 左眼高光
+ctx.fillStyle = '#fff';
+ctx.beginPath(); ctx.arc(cx-35, cy-26, 6, 0, Math.PI*2); ctx.fill();
+ctx.beginPath(); ctx.arc(cx-47, cy-22, 3, 0, Math.PI*2); ctx.fill();
+
+// 眼睛（右大眼）
+ctx.fillStyle = '#222';
+ctx.beginPath(); ctx.ellipse(cx+42, cy-18, 16, 20, 0, 0, Math.PI*2); ctx.fill();
+ctx.fillStyle = '#fff';
+ctx.beginPath(); ctx.arc(cx+49, cy-26, 6, 0, Math.PI*2); ctx.fill();
+ctx.beginPath(); ctx.arc(cx+37, cy-22, 3, 0, Math.PI*2); ctx.fill();
+
+// 微笑
+ctx.strokeStyle = '#222';
+ctx.lineWidth = 4;
+ctx.lineCap = 'round';
+ctx.beginPath();
+ctx.arc(cx, cy+22, 38, 0.15*Math.PI, 0.85*Math.PI);
+ctx.stroke();
+
+// 腮红
+ctx.fillStyle = 'rgba(255,130,130,0.2)';
+ctx.beginPath(); ctx.ellipse(cx-68, cy+22, 22, 12, 0, 0, Math.PI*2); ctx.fill();
+ctx.beginPath(); ctx.ellipse(cx+68, cy+22, 22, 12, 0, 0, Math.PI*2); ctx.fill();
+
+// 右手（白手套从右下伸出，招手）
+ctx.strokeStyle = '#222';
+ctx.lineWidth = 6;
+ctx.lineCap = 'round';
+ctx.beginPath();
+ctx.moveTo(cx+130, cy+100);
+ctx.quadraticCurveTo(cx+175, cy+155, cx+155, cy+205);
+ctx.stroke();
+// 右手掌
+ctx.fillStyle = '#fff';
+ctx.strokeStyle = '#ccc';
+ctx.lineWidth = 2;
+ctx.beginPath(); ctx.arc(cx+155, cy+205, 20, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+// 三根手指（张开）
+ctx.strokeStyle = '#ccc';
+ctx.lineWidth = 2.5;
+ctx.beginPath(); ctx.moveTo(cx+148, cy+200); ctx.lineTo(cx+142, cy+178); ctx.stroke();
+ctx.beginPath(); ctx.moveTo(cx+155, cy+198); ctx.lineTo(cx+156, cy+175); ctx.stroke();
+ctx.beginPath(); ctx.moveTo(cx+162, cy+200); ctx.lineTo(cx+170, cy+180); ctx.stroke();
+
+// 左手（白手套从左上伸出，竖大拇指）
+ctx.strokeStyle = '#222';
+ctx.lineWidth = 6;
+ctx.lineCap = 'round';
+ctx.beginPath();
+ctx.moveTo(cx-130, cy-50);
+ctx.quadraticCurveTo(cx-180, cy-115, cx-145, cy-165);
+ctx.stroke();
+// 左手掌
+ctx.fillStyle = '#fff';
+ctx.strokeStyle = '#ccc';
+ctx.lineWidth = 2;
+ctx.beginPath(); ctx.arc(cx-145, cy-165, 20, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+// 大拇指（竖起）
+ctx.strokeStyle = '#ccc';
+ctx.lineWidth = 2.5;
+ctx.beginPath(); ctx.moveTo(cx-138, cy-160); ctx.lineTo(cx-130, cy-180);
+ctx.lineTo(cx-138, cy-185); ctx.stroke();
+// 另外两指握拳
+ctx.strokeStyle = '#bbb';
+ctx.lineWidth = 2;
+ctx.beginPath(); ctx.moveTo(cx-150, cy-160); ctx.lineTo(cx-152, cy-147); ctx.stroke();
+ctx.beginPath(); ctx.moveTo(cx-155, cy-158); ctx.lineTo(cx-160, cy-145); ctx.stroke();
+
+// 底部文字光晕
+ctx.fillStyle = 'rgba(255,255,255,0.06)';
+ctx.font = 'bold 24px Arial';
+ctx.textAlign = 'center';
+ctx.fillText('疯狂的珠子', cx, cy+r+65);
+</script>
+</body>
+</html>
