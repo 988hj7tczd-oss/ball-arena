@@ -1769,7 +1769,7 @@ function drawMenu() {
 
     // ─── 标题下方滚动公告 ───
     (function(){
-        const msgs=['欢迎来到疯狂弹珠！','连胜获得额外金币奖励！','回旋镖两白两黑新样式','训练场可试用所有武器道具','拳击手套外观已上线','收集纹章彰显实力！'];
+        const msgs=['欢迎来到疯狂的珠子！','新增加速键·Shift加速','生存模式缩圈伤害平衡','球型血量与武器调整','训练场可试用所有武器','连胜获得额外金币奖励！'];
         const longText='  ★  '+msgs.join('  ★  ')+'  ★  ';
         ctx.font=`bold ${S(18)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
         const tw=ctx.measureText(longText).width;
