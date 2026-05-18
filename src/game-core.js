@@ -78,31 +78,61 @@ ctx.roundRect = function(x, y, w, h, r) {
     return this;
 };
 
-// ─── 游戏固定逻辑分辨率 ───
-const GAME_W = 1920, GAME_H = 1080;
+// ─── 响应式缩放工具 ───
+function S(n) { return Math.round(n * Math.max(0.45, GAME_H / 1080)); }         // 字体/UI 尺寸（按高度缩放）
+function SX(n) { return Math.round(n * GAME_W / 1920); }        // X 方向缩放
+function SP(n) { return Math.round(n * ARENA_RADIUS / 525); }   // 游戏物理值缩放（球半径、速度、武器射程等）
 
-const ARENA_RADIUS = 525;
-const CENTER_X = GAME_W / 2;
-const CENTER_Y = GAME_H / 2;
+// ─── 游戏逻辑分辨率（浏览器固定 1920×1080，移动端匹配屏幕尺寸） ───
+let GAME_W = 1920, GAME_H = 1080;
+
+let ARENA_RADIUS = 525;
+let CENTER_X = GAME_W / 2;
+let CENTER_Y = GAME_H / 2;
 
 // ─── 屏幕→逻辑坐标缩放因子（canvas 实际像素 / 逻辑分辨率） ───
-let GAME_SCALE_X = canvas.width / GAME_W;
-let GAME_SCALE_Y = canvas.height / GAME_H;
+let GAME_SCALE_X = 1;
+let GAME_SCALE_Y = 1;
+let MODE_BTN_BOTTOM = 0; // 模式按钮区域底部 Y（由 buildMenu 计算，drawMenu 使用）
 
 // ═══════════════════════════════════════
 //  响应式尺寸
 // ═══════════════════════════════════════
 let JOYSTICK_X = 280, JOYSTICK_Y = 930, JOYSTICK_RADIUS = 75, JOYSTICK_KNOB = 33, JOYSTICK_DEADZONE = 13;
 let ATTACK_X = 1640, ATTACK_Y = 930, ATTACK_RADIUS = 60;
+let BOOST_X = 1640, BOOST_Y = 850, BOOST_RADIUS = 40;
+const BOOST_DURATION = 2;
+const BOOST_COOLDOWN = 5;
+const BOOST_SPEED_MULT = 1.5;
+let boostCooldown = 0;
+let boostPressed = false;
+
+// ─── 响应式核心：根据 canvas 实际尺寸重算 GAME_W/GAME_H ───
+function recalcGameDimensions() {
+    if (Platform.name !== 'browser') {
+        GAME_W = canvas.width;
+        GAME_H = canvas.height;
+    }
+    ARENA_RADIUS = Math.min(GAME_W, GAME_H) * (525 / 1080);
+    CENTER_X = GAME_W / 2;
+    CENTER_Y = GAME_H / 2;
+    GAME_SCALE_X = canvas.width / GAME_W;
+    GAME_SCALE_Y = canvas.height / GAME_H;
+    recalcUI();
+}
 
 function recalcUI() {
     JOYSTICK_X = GAME_W * 0.146; JOYSTICK_Y = GAME_H * 0.86;
-    JOYSTICK_RADIUS = Math.min(GAME_W, GAME_H) * 0.07;
+    JOYSTICK_RADIUS = Math.max(40, Math.min(GAME_W, GAME_H) * 0.07);
     JOYSTICK_KNOB = JOYSTICK_RADIUS * 0.44;
     JOYSTICK_DEADZONE = Math.min(GAME_W, GAME_H) * 0.012;
     ATTACK_X = GAME_W * 0.854; ATTACK_Y = GAME_H * 0.86;
-    ATTACK_RADIUS = Math.min(GAME_W, GAME_H) * 0.055;
+    ATTACK_RADIUS = Math.max(30, Math.min(GAME_W, GAME_H) * 0.055);
+    BOOST_X = ATTACK_X + ATTACK_RADIUS * 0.8;
+    BOOST_Y = ATTACK_Y - ATTACK_RADIUS * 2.1;
+    BOOST_RADIUS = ATTACK_RADIUS;
 }
+
 function resizeCanvas() {
     if (Platform.name === 'browser') {
         const maxW = Platform.getScreenWidth(), maxH = Platform.getScreenHeight(), aspect = GAME_W / GAME_H;
@@ -111,9 +141,7 @@ function resizeCanvas() {
         canvas.style.width = Math.floor(w) + 'px'; canvas.style.height = Math.floor(h) + 'px';
     }
     if (typeof Platform.refreshScreenSize === 'function') Platform.refreshScreenSize(canvas);
-    GAME_SCALE_X = canvas.width / GAME_W;
-    GAME_SCALE_Y = canvas.height / GAME_H;
-    recalcUI();
+    recalcGameDimensions();
 }
 Platform.onResize(resizeCanvas);
 Platform.onOrientationChange(() => setTimeout(resizeCanvas, 300));
@@ -122,15 +150,15 @@ Platform.onOrientationChange(() => setTimeout(resizeCanvas, 300));
 //  数据表
 // ═══════════════════════════════════════
 const WEAPONS = [
-    { id:'single_gun',  name:'🔫单发枪', type:'ranged', damage:1.0, cooldown:0.5, range:450, speed:825, uses:2, weight:15 },
+    { id:'single_gun',  name:'🔫单发枪', type:'ranged', damage:0.9, cooldown:0.5, range:450, speed:825, uses:2, weight:15 },
     { id:'triple_gun',  name:'🔫🔫🔫三连发', type:'ranged', damage:0.6, cooldown:1.5, range:375, speed:720, uses:2, bulletCount:3, spread:15, weight:10 },
-    { id:'brick',       name:'🧱砖块', type:'ranged', damage:1.4, cooldown:2.0, range:525, speed:480, uses:1, splash:90, splashDmg:0.7, weight:8 },
-    { id:'dagger',      name:'🗡️匕首', type:'melee', damage:1.4, cooldown:0.3, range:98, uses:3, arc:360, weight:12 },
-    { id:'big_sword',   name:'⚔️大刀', type:'melee', damage:1.7, cooldown:0.8, range:128, uses:3, arc:120, weight:10 },
-    { id:'staff',       name:'🏏长棍', type:'melee', damage:1.3, cooldown:0.6, range:158, uses:3, arc:90, knockback:120, weight:10 },
-    { id:'laser_gun',   name:'🔫激光枪', type:'ranged', damage:1.0, cooldown:1.2, range:750, speed:3000, uses:2, piercing:true, weight:6 },
-    { id:'shotgun',     name:'💥霰弹枪', type:'ranged', damage:0.9, cooldown:2.0, range:300, speed:675, uses:1, bulletCount:6, spread:28, weight:8 },
-    { id:'boomerang',   name:'🪃回旋镖',  type:'ranged', damage:0.225, cooldown:0.6, range:450, speed:450, uses:2, piercing:true, boomerang:true, weight:3 },
+    { id:'brick',       name:'🧱砖块', type:'ranged', damage:1.0, cooldown:2.0, range:525, speed:480, uses:1, splash:90, splashDmg:0.5, weight:8 },
+    { id:'dagger',      name:'🗡️匕首', type:'melee', damage:0.8, cooldown:0.3, range:98, uses:3, arc:360, weight:12 },
+    { id:'big_sword',   name:'⚔️大刀', type:'melee', damage:1.2, cooldown:0.8, range:128, uses:3, arc:120, weight:10 },
+    { id:'staff',       name:'🏏长棍', type:'melee', damage:0.9, cooldown:0.6, range:158, uses:3, arc:90, knockback:60, weight:10 },
+    { id:'laser_gun',   name:'🔫激光枪', type:'ranged', damage:1.2, cooldown:1.2, range:750, speed:3000, uses:2, piercing:true, weight:6 },
+    { id:'shotgun',     name:'💥霰弹枪', type:'ranged', damage:0.6, cooldown:2.0, range:300, speed:675, uses:1, bulletCount:6, spread:28, weight:8 },
+    { id:'boomerang',   name:'🪃回旋镖',  type:'ranged', damage:0.5, cooldown:0.6, range:450, speed:450, uses:2, piercing:true, boomerang:true, weight:3 },
 ];
 const ITEMS = [
     { id:'white_apple',  name:'🍎白苹果', type:'heal', target:'self', value:1, weight:30, color:'#ffffff' },
@@ -148,10 +176,10 @@ const ITEMS = [
 //  球型 & 游戏模式
 // ═══════════════════════════════════════
 const BALL_TYPES = [
-    { id:'balanced', name:'⚖️ 均衡型', hp:20, speed:225, radius:27, desc:'攻防平衡 · 新手首选' },
-    { id:'tank',     name:'🛡️ 坦克型', hp:26, speed:165, radius:33, desc:'高防高血 · 稳扎稳打' },
-    { id:'speedy',   name:'💨 速度型', hp:7, speed:363, radius:23, desc:'高移速机动 · 灵活拉扯' },
-    { id:'attacker', name:'⚔️ 攻击型', hp:10, speed:255, radius:26, desc:'高伤高爆发 · 一击制胜', dmgMul:1.3 },
+    { id:'balanced', name:'⚖️ 均衡型', hp:28, speed:225, radius:27, desc:'攻防平衡 · 新手首选' },
+    { id:'tank',     name:'🛡️ 坦克型', hp:38, speed:165, radius:33, desc:'高防高血 · 稳扎稳打' },
+    { id:'speedy',   name:'💨 速度型', hp:12, speed:363, radius:23, desc:'高移速机动 · 灵活拉扯' },
+    { id:'attacker', name:'⚔️ 攻击型', hp:18, speed:255, radius:26, desc:'高伤高爆发 · 一击制胜', dmgMul:1.3 },
 ];
 const GAME_MODES = [
     { id:'2v2',      name:'🎌 2v2 团队战', desc:'红蓝对抗 • 五局三胜' },
@@ -159,8 +187,8 @@ const GAME_MODES = [
     { id:'team2',    name:'🤝 2人组队',    desc:'双人合作 • 对抗AI' },
     { id:'team4',    name:'🤝 4人组队',    desc:'四人合作 • 对抗AI' },
     { id:'ffa',      name:'🏆 大乱斗',     desc:'各自为战 • 活到最后' },
-    { id:'survival', name:'☣️ 生存吃鸡',   desc:'毒圈缩圈 • 最后存活' },
-    { id:'duo_survival', name:'👥 吃鸡组队',desc:'双人组队 • 6队混战' },
+    { id:'survival', name:'生存竞技',   desc:'毒圈缩圈 • 最后存活' },
+    { id:'duo_survival', name:'组队竞技',desc:'双人组队 • 6队混战' },
     { id:'training', name:'🎯 训练场',      desc:'自由测试 • 无限武器' },
 ];
 
@@ -201,7 +229,7 @@ const SURVIVAL_COLORS = [
 // ═══════════════════════════════════════
 //  游戏状态
 // ═══════════════════════════════════════
-let selectedMode = '2v2';
+let selectedMode = null;
 let selectedBallType = 'balanced';
 let gameState = 'menu'; // menu | countdown | playing | roundEnd | champion | ended
 let countdownTimer = 3.2;
@@ -430,7 +458,7 @@ function applyUpgradesToBall(b, bt) {
     if (!bt) return;
     b.hp = bt.hp + (upgrades.hp||0);
     b.maxHp = b.hp;
-    b.speed = bt.speed + (upgrades.speed||0) * 5;
+    b.speed = SP(bt.speed) + (upgrades.speed||0) * 5;
     b.damageMultiplier = (bt.dmgMul||1) + (upgrades.attack||0) * 0.05;
 }
 
@@ -439,8 +467,8 @@ const ZONE_PHASES = [
     { radius:350, dmgPerSec:0,  time:30,  label:'准备' },
     { radius:260, dmgPerSec:1,  time:60,  label:'第一阶段' },
     { radius:175, dmgPerSec:2,  time:90,  label:'第二阶段' },
-    { radius:100, dmgPerSec:4,  time:120, label:'第三阶段' },
-    { radius:60,  dmgPerSec:8,  time:999, label:'决赛圈' },
+    { radius:100, dmgPerSec:3,  time:120, label:'第三阶段' },
+    { radius:60,  dmgPerSec:4,  time:999, label:'决赛圈' },
 ];
 let zoneState = {
     phase:-1, timer:0,
@@ -523,7 +551,7 @@ function spawnPickupParticles(x,y,color){
 // ═══════════════════════════════════════
 const sound = {
     _ctx:null,_enabled:true,
-    _c(){if(!this._enabled)return null;if(!this._ctx){this._ctx=Platform.createAudioContext();if(!this._ctx){this._enabled=false;return null}}return this._ctx},
+    _c(){if(!this._enabled)return null;if(!this._ctx){this._ctx=Platform.createAudioContext();if(!this._ctx){this._enabled=false;return null}}if(this._ctx.state==='suspended')try{this._ctx.resume()}catch(e){}return this._ctx},
     shoot(t){const c=this._c();if(!c)return;const o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);if(t==='melee'){o.type='sawtooth';o.frequency.setValueAtTime(300,c.currentTime);o.frequency.exponentialRampToValueAtTime(80,c.currentTime+0.08)}else{o.frequency.setValueAtTime(1200,c.currentTime);o.frequency.exponentialRampToValueAtTime(300,c.currentTime+0.08)}g.gain.setValueAtTime(0.08,c.currentTime);g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+0.08);o.start(c.currentTime);o.stop(c.currentTime+0.08)},
     hit(){const c=this._c();if(!c)return;const b=c.createBuffer(1,c.sampleRate*0.04,c.sampleRate),d=b.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=(Math.random()*2-1)*(1-i/d.length);const s=c.createBufferSource();s.buffer=b;const g=c.createGain();s.connect(g);g.connect(c.destination);g.gain.setValueAtTime(0.1,c.currentTime);g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+0.04);s.start(c.currentTime)},
     kill(){const c=this._c();if(!c)return;const o=c.createOscillator(),g=c.createGain();o.type='sine';o.connect(g);g.connect(c.destination);o.frequency.setValueAtTime(200,c.currentTime);o.frequency.exponentialRampToValueAtTime(40,c.currentTime+0.3);g.gain.setValueAtTime(0.18,c.currentTime);g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+0.3);o.start(c.currentTime);o.stop(c.currentTime+0.3)},
@@ -559,7 +587,7 @@ class Ball {
         this.team = team; this.index = index;
         this.x = x; this.y = y;
         this.radius = 18; this.hp = 5; this.maxHp = 5;
-        this.isAlive = true; this.speed = 150;
+        this.isAlive = true; this.speed = SP(150);
         this.angle = 0; this.respawnTimer = 0;
         this.isPlayer = false; this.isPlayer2 = false;
         this.name = ''; this.kills = 0;
@@ -575,6 +603,7 @@ class Ball {
         this.hasDodge = false; this.dodgeCD = 0;
         this.frozen = 0; this.slowed = 0; this.oobTimer = 0;
         this.speedBoost = 0; // 加速带离开后持续效果计时
+        this.boostTimer = 0; // 加速键计时
 
         // AI
         this.targetX = this.x; this.targetY = this.y;
@@ -626,8 +655,10 @@ class Ball {
     }
 
     getSpeedMultiplier() {
-        if (this.speedBoost > 0) return 1.6;
-        return 1;
+        let m = 1;
+        if (this.speedBoost > 0) m *= 1.6;
+        if (this.boostTimer > 0) m *= BOOST_SPEED_MULT;
+        return m;
     }
 
     update(dt) {
@@ -649,6 +680,7 @@ class Ball {
         } else if (this.speedBoost > 0) {
             this.speedBoost -= dt;
         }
+        if (this.boostTimer > 0) this.boostTimer -= dt;
 
         if (this.isPlayer) this._handleP1Input(dt);
         else if (this.isPlayer2) this._handleP2Input(dt);
@@ -702,7 +734,7 @@ class Ball {
         const dEnemy=enemy?Math.sqrt(Math.pow(enemy.x-this.x,2)+Math.pow(enemy.y-this.y,2)):Infinity;
         const fleeRange=[150,200,250][aiDifficulty]||150;
         const chaseRange=[220,280,340][aiDifficulty]||220;
-        const wpPickupRange=[210,260,300][aiDifficulty]||210;
+        const wpPickupRange=SP([210,260,300][aiDifficulty]||210);
         const healRange=[280,350,400][aiDifficulty]||280;
         if(hpRatio<0.5&&nearDrop&&nearDrop.data&&nearDrop.data.type==='heal'&&dDrop<healRange){this.aiState='pickup';this.targetX=nearDrop.x;this.targetY=nearDrop.y;}
         else if(hpRatio<0.3&&enemy&&dEnemy<fleeRange){this.aiState="flee";const dx=this.x-enemy.x,dy=this.y-enemy.y,d=Math.sqrt(dx*dx+dy*dy)||1;this.targetX=this.x+(dx/d)*250;this.targetY=this.y+(dy/d)*250;}
@@ -771,7 +803,7 @@ class Ball {
             const px=this.x+Math.cos(a)*dist,py=this.y+Math.sin(a)*dist;
             particles.push(new Particle(px,py,Math.cos(a)*30,Math.sin(a)*30,'#ffffff',0.1+Math.random()*0.15,2+Math.random()*3));
         }
-        for(const b of balls){if(b===this||!b.isAlive||b.team===this.team)continue;const d=Math.sqrt(Math.pow(b.x-this.x,2)+Math.pow(b.y-this.y,2));if(d>w.range+20)continue;if(arc>=360){const prevHp=b.hp;b.takeDamage(w.damage*this.damageMultiplier,w.knockback||0,this.angle,'#ffcc00');if(!b.isAlive&&prevHp>0)this.kills++;continue;}const eAngle=Math.atan2(b.y-this.y,b.x-this.x);let diff=Math.abs(eAngle-this.angle)*180/Math.PI;if(diff>180)diff=360-diff;if(diff<=arc/2){const prevHp=b.hp;b.takeDamage(w.damage*this.damageMultiplier,w.knockback||0,this.angle,'#ffcc00');if(!b.isAlive&&prevHp>0)this.kills++;}}
+        for(const b of balls){if(b===this||!b.isAlive||b.team===this.team)continue;const d=Math.sqrt(Math.pow(b.x-this.x,2)+Math.pow(b.y-this.y,2));if(d>w.range+20)continue;if(arc>=360){const prevHp=b.hp;b.takeDamage(w.damage*this.damageMultiplier,SP(w.knockback||0),this.angle,'#ffcc00');if(!b.isAlive&&prevHp>0)this.kills++;continue;}const eAngle=Math.atan2(b.y-this.y,b.x-this.x);let diff=Math.abs(eAngle-this.angle)*180/Math.PI;if(diff>180)diff=360-diff;if(diff<=arc/2){const prevHp=b.hp;b.takeDamage(w.damage*this.damageMultiplier,SP(w.knockback||0),this.angle,'#ffcc00');if(!b.isAlive&&prevHp>0)this.kills++;}}
     }
 
     takeDamage(dmg, knockback=0, angle=0, hitColor) {
@@ -813,7 +845,7 @@ class Ball {
         for(let i=0;i<16;i++){const a=Math.random()*Math.PI*2,s=50+Math.random()*150;particles.push(new Particle(this.x,this.y,Math.cos(a)*s,Math.sin(a)*s,this.color,0.5,3+Math.random()*3));}
     }
 
-    pickupWeapon(w) { if(this.weapon)return;this.weapon=w;this.weaponUses=w.uses;this.attackCD=0; }
+    pickupWeapon(w) { if(this.weapon)return;this.weapon={...w,range:SP(w.range),speed:w.speed?SP(w.speed):undefined};this.weaponUses=w.uses;this.attackCD=0; }
     pickupItem(item) {
         switch(item.type){
             case'heal':if(item.target==='self'){if(this.hp>=this.maxHp)return;this.hp=Math.min(this.maxHp,this.hp+(item.value||1));}else{for(const b of balls){if(b.team===this.team&&b.isAlive&&b.hp<(item.value||2))b.hp=Math.min(b.maxHp,b.hp+(item.value||2));}}break;
@@ -1131,7 +1163,8 @@ class Ball {
         // ─── 8. 武器（画在右手旁）───
         const wx=rh.tip.x+Math.cos(this.angle)*6,wy=rh.tip.y+Math.sin(this.angle)*6;
         if(this.weapon){
-            ctx.save();ctx.translate(wx,wy);ctx.rotate(this.angle);ctx.scale(1.5,1.5);
+            const wScale = 1.5 * Math.sqrt(ARENA_RADIUS / 525);
+            ctx.save();ctx.translate(wx,wy);ctx.rotate(this.angle);ctx.scale(wScale,wScale);
             ctx.lineWidth=1.5;ctx.strokeStyle='#222';
             switch(this.weapon.id){
                 case'single_gun':
@@ -1151,7 +1184,7 @@ class Ball {
                     ctx.fillStyle='#cc8844';ctx.fillRect(0,-6,11,11);ctx.strokeRect(0,-6,11,11);
                     ctx.strokeStyle='#996633';ctx.lineWidth=0.5;
                     ctx.beginPath();ctx.moveTo(5,-6);ctx.lineTo(5,5);ctx.moveTo(0,-1);ctx.lineTo(11,-1);ctx.stroke();
-                    ctx.fillStyle='#ff4444';ctx.font='bold 12px Arial';ctx.fillText('!',5,2);
+                    ctx.fillStyle='#ff4444';ctx.font=`bold ${S(12)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillText('!',5,2);
                     ctx.strokeStyle='#222';ctx.lineWidth=1.5;break;
                 case'dagger':
                     ctx.fillStyle='#d0d8e8';ctx.beginPath();ctx.moveTo(14,0);ctx.lineTo(2,-4);ctx.lineTo(2,4);ctx.closePath();ctx.fill();ctx.stroke();
@@ -1169,7 +1202,7 @@ class Ball {
                     ctx.fillStyle='#44ff88';ctx.beginPath();ctx.arc(12,0,4.5,0,Math.PI*2);ctx.fill();ctx.stroke();
                     ctx.fillStyle='#aaffcc';ctx.beginPath();ctx.arc(12,0,2.5,0,Math.PI*2);ctx.fill();
                     ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(11,-1,1,0,Math.PI*2);ctx.fill();
-                    ctx.fillStyle='#44ff88';ctx.font='9px Arial';ctx.fillText('✦',14,-5);break;
+                    ctx.fillStyle='#44ff88';ctx.font=`${S(9)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillText('✦',14,-5);break;
                 case'laser_gun':
                     ctx.fillStyle='#778899';ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(6,-3);ctx.lineTo(18,-3);ctx.lineTo(18,3);ctx.lineTo(6,3);ctx.closePath();ctx.fill();ctx.stroke();
                     ctx.fillStyle='#ff3344';ctx.fillRect(14,-2,6,4);ctx.strokeRect(14,-2,6,4);
@@ -1193,7 +1226,7 @@ class Ball {
                     ctx.fillStyle='#888';ctx.beginPath();ctx.arc(0,0,2,0,Math.PI*2);ctx.fill();
                     break;
             }
-            ctx.fillStyle='#fff';ctx.font='bold 14px Arial';ctx.textAlign='center';ctx.textBaseline='bottom';ctx.fillText(this.weaponUses,8,-10);
+            ctx.fillStyle='#fff';ctx.font=`bold ${S(14)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='bottom';ctx.fillText(this.weaponUses,8,-10);
             ctx.restore();
         }
         // ─── 9. 称号 ───
@@ -1201,18 +1234,18 @@ class Ball {
         const label=this.isPlayer?'P1':(this.isPlayer2?'P2':'');
         if(title){
             ctx.globalAlpha=1;
-            ctx.font='bold 15px Arial';ctx.textAlign='center';ctx.textBaseline='bottom';
+            ctx.font=`bold ${S(15)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='bottom';
             ctx.fillStyle=title.color;
             ctx.fillText('「'+title.text+'」',this.x,this.y-r-28-(label?10:0));
         }
         // ─── 10. 名字 ───
         ctx.globalAlpha=1;
-        ctx.font='17px Arial';ctx.textAlign='center';ctx.textBaseline='bottom';
+        ctx.font=`${S(17)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='bottom';
         ctx.fillStyle=this.isPlayer2?'#ffff88':(this.team==='red'?'#ff8888':'#88bbff');
         ctx.fillText(this.name,this.x,this.y-r-16);
-        if(label){ctx.font='bold 14px Arial';ctx.fillStyle='#ffff88';ctx.textBaseline='bottom';ctx.fillText('['+label+']',this.x,this.y-r-28);}
+        if(label){ctx.font=`bold ${S(14)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ffff88';ctx.textBaseline='bottom';ctx.fillText('['+label+']',this.x,this.y-r-SP(28));}
         // ─── 11. HP 条 ───
-        const bw=45,bh=6,bx=this.x-bw/2,by=this.y-r-11;
+        const bw=SP(45),bh=SP(6),bx=this.x-bw/2,by=this.y-r-SP(11);
         ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(bx,by,bw,bh);
         const hr=this.hp/this.maxHp;ctx.fillStyle=hr>0.5?'#44ff44':(hr>0.25?'#ff8800':'#ff3333');ctx.fillRect(bx,by,bw*hr,bh);
         // ─── 12. 护甲环 ───
@@ -1247,7 +1280,7 @@ class Projectile {
                 // 飞出阶段
                 this.x += this.vx * dt;
                 this.y += this.vy * dt;
-                if (this.travelTime > 0.45 || this.distTraveled > 250) {
+                if (this.travelTime > 0.45 || this.distTraveled > SP(250)) {
                     this.returning = true;
                 }
             } else {
@@ -1256,14 +1289,14 @@ class Projectile {
                     const dx = this.owner.x - this.x;
                     const dy = this.owner.y - this.y;
                     const dist = Math.sqrt(dx*dx + dy*dy);
-                    if (dist < 30) return true; // 回到手中
+                    if (dist < SP(30)) return true; // 回到手中
                     const spd = this.speed * 1.0;
                     this.vx = (dx/dist) * spd;
                     this.vy = (dy/dist) * spd;
                 }
                 this.x += this.vx * dt;
                 this.y += this.vy * dt;
-                if (this.distTraveled > 900) return true; // 飞太远了
+                if (this.distTraveled > SP(900)) return true; // 飞太远了
             }
 
             // 回旋镖全程检测碰撞（穿透伤害）
@@ -1358,6 +1391,7 @@ function initGame() {
     joystick.active=false;joystick.dx=0;joystick.dy=0;
     joystick.knobX=JOYSTICK_X;joystick.knobY=JOYSTICK_Y;
     joystick.touchId=-1;attackPressed=false;p2AttackPressed=false;
+    boostCooldown=0;boostPressed=false;
 
     lastWinner = null; gameOverTab = 0;
     // 首次启动指引
@@ -1365,7 +1399,7 @@ function initGame() {
     // 重置毒圈
     zoneState = { phase:-1, timer:0, curRadius:ARENA_RADIUS, curCenterX:CENTER_X, curCenterY:CENTER_Y, startRadius:ARENA_RADIUS, startCenterX:CENTER_X, startCenterY:CENTER_Y, targetRadius:ARENA_RADIUS, targetCenterX:CENTER_X, targetCenterY:CENTER_Y, warning:false, dmgAccum:0 };
     // 重置加速带
-    speedZone = { active:false, x:0, y:0, r:70, boost:1.6, timer:0 };
+    speedZone = { active:false, x:0, y:0, r:SP(70), boost:1.6, timer:0 };
     if (selectedMode === 'survival' || selectedMode === 'duo_survival') gameTime = 400;
     aiDifficulty = getAIDifficulty();
     // 段位匹配难度递增（叠加）
@@ -1377,13 +1411,13 @@ function initGame() {
     if (selectedMode === 'training') {
         const b = new Ball('red', 0, CENTER_X, CENTER_Y);
         b.isPlayer = true; b.name = '🧑训练生';
-        b.radius = bt.radius; applyUpgradesToBall(b, bt);
+        b.radius = SP(bt.radius); applyUpgradesToBall(b, bt);
         balls.push(b);
         b.pickupWeapon(WEAPONS.find(w=>w.id==='single_gun'));
         // 静止木桩机器人
         const dummy = new Ball('blue', 1, CENTER_X + 120, CENTER_Y);
         dummy.isStationary = true; dummy.name = '🎯 训练木桩';
-        dummy.hp = 20; dummy.maxHp = 20; dummy.radius = 20;
+        dummy.hp = 20; dummy.maxHp = 20; dummy.radius = SP(20);
         balls.push(dummy);
         // 所有武器道具沿内圈固定摆放
         const trainingItems = [];
@@ -1410,7 +1444,7 @@ function initGame() {
             const y = CENTER_Y + Math.sin(angle) * r;
             const b = new Ball(FFA_COLORS[i].id, i, x, y);
             b.name = ffaNames[i];
-            b.radius = bt.radius;
+            b.radius = SP(bt.radius);
             if (i === 0) { b.isPlayer = true; applyUpgradesToBall(b, bt); }
             balls.push(b);
         }
@@ -1426,7 +1460,7 @@ function initGame() {
             const b = new Ball(SURVIVAL_COLORS[i].id, i, x, y);
             b.name = NAMES_SURVIVAL[i];
             b.hp = 4; b.maxHp = 4;
-            b.radius = bt.radius;
+            b.radius = SP(bt.radius);
             if (i === 0) { b.isPlayer = true; applyUpgradesToBall(b, bt); }
             balls.push(b);
         }
@@ -1453,7 +1487,7 @@ function initGame() {
                 const b = new Ball(teamColors[t].id, idx, x, y);
                 b.name = teamNames[t][m];
                 b.hp = 4; b.maxHp = 4;
-                b.radius = bt.radius;
+                b.radius = SP(bt.radius);
                 if (t === 0 && m === 0) { b.isPlayer = true; applyUpgradesToBall(b, bt); }
                 if (t === 0 && m === 1) { b.isPlayer2 = true; applyUpgradesToBall(b, bt); }
                 balls.push(b);
@@ -1479,8 +1513,8 @@ function initGame() {
         const b=new Ball(team,i,x,y);
         if(team==='red'){
             b.name=redNames[row];
-            if(i===0){b.isPlayer=true;b.radius=bt.radius; applyUpgradesToBall(b, bt);}
-            else if(isCoop && row===1){b.isPlayer2=true;b.radius=bt.radius; applyUpgradesToBall(b, bt);}
+            if(i===0){b.isPlayer=true;b.radius=SP(bt.radius); applyUpgradesToBall(b, bt);}
+            else if(isCoop && row===1){b.isPlayer2=true;b.radius=SP(bt.radius); applyUpgradesToBall(b, bt);}
         }
         else{
             b.name=blueNames[row];
@@ -1509,10 +1543,8 @@ function screenToCanvas(cx,cy){
         const r = canvas.getBoundingClientRect();
         return { x: (cx - r.left) * (canvas.width / r.width), y: (cy - r.top) * (canvas.height / r.height) };
     }
-    // 非浏览器：触摸坐标(CSS像素) → 逻辑坐标(canvas 1920×1080)
-    const cssW = Platform.getScreenWidth();
-    const cssH = Platform.getScreenHeight();
-    return { x: cx * (canvas.width / cssW), y: cy * (canvas.height / cssH) };
+    // 微信/抖音：canvas = 屏幕 CSS 像素尺寸，1:1 映射到 GAME_W/GAME_H
+    return { x: cx * (GAME_W / canvas.width), y: cy * (GAME_H / canvas.height) };
 }
 
 // ═══════════════════════════════════════
@@ -1529,6 +1561,7 @@ function updateJoystickPos(cx,cy){
 function resetJoystick(){joystick.active=false;joystick.dx=0;joystick.dy=0;joystick.knobX=JOYSTICK_X;joystick.knobY=JOYSTICK_Y;joystick.touchId=-1;}
 function isInJoystick(mx,my){return Math.sqrt(Math.pow(mx-JOYSTICK_X,2)+Math.pow(my-JOYSTICK_Y,2))<=JOYSTICK_RADIUS*1.5;}
 function isInAttack(mx,my){return Math.sqrt(Math.pow(mx-ATTACK_X,2)+Math.pow(my-ATTACK_Y,2))<=ATTACK_RADIUS*1.5;}
+function isInBoost(mx,my){return Math.sqrt(Math.pow(mx-BOOST_X,2)+Math.pow(my-BOOST_Y,2))<=BOOST_RADIUS*1.5;}
 
 // ═══════════════════════════════════════
 //  键盘
@@ -1538,7 +1571,8 @@ Platform.onKeyDown((e)=>{
     if(e.key===' '||e.key==='j'||e.key==='J'){attackPressed=true;attackJustPressed=true;e.preventDefault();}
     if(e.key==='Enter'){p2AttackPressed=true;p2AttackJustPressed=true;e.preventDefault();}
     if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key))e.preventDefault();
-    if(e.key==='m'||e.key==='M'){soundEnabled=!soundEnabled;sound._enabled=soundEnabled;}
+    if(e.key==='m'||e.key==='M'){soundEnabled=!soundEnabled;sound._enabled=soundEnabled;sound._c();}
+    if(e.key==='Shift'){boostPressed=true;}
     if(e.key==='Escape'&&(selectedMode==='training'||gameState==='playing'||gameState==='countdown')){gameState='menu';e.preventDefault();}
 });
 Platform.onKeyUp((e)=>{
@@ -1554,8 +1588,8 @@ Platform.onKeyUp((e)=>{
 Platform.onMouseDown(canvas,(e)=>{
     const {x,y}=screenToCanvas(e.clientX,e.clientY);
     if(guideTimer>0){guideTimer=0;Platform.setItem('guide_shown','1');}
-    if(x>=30&&x<=84&&y>=22&&y<=76){soundEnabled=!soundEnabled;sound._enabled=soundEnabled;return;}
-    if(gameState!=='menu'&&x>=GAME_W-76&&x<=GAME_W-22&&y>=22&&y<=76){gameState='menu';return;}
+    if(x>=SX(50)&&x<=SX(104)&&y>=S(26)&&y<=S(80)){soundEnabled=!soundEnabled;sound._enabled=soundEnabled;return;}
+    if(gameState!=='menu'&&x>=GAME_W-SX(110)&&x<=GAME_W-SX(56)&&y>=S(26)&&y<=S(80)){gameState='menu';return;}
     if(gameState==='menu'){handleMenuClick(x,y);return;}
     if(gameState==='upgrade'){handleUpgradeClick(x,y);return;}
     if(gameState==='leaderboard'){handleLeaderboardClick(x,y);return;}
@@ -1563,6 +1597,7 @@ Platform.onMouseDown(canvas,(e)=>{
     if(gameState==='ended'&&y>GAME_H*0.07&&y<GAME_H*0.10){handleGameOverTabClick(x,y);}
     else if(gameState==='ended'||gameState==='champion'){handleGameOverBtnClick(x,y);}
     else if(isInAttack(x,y)){attackPressed=true;attackJustPressed=true;}
+    else if(isInBoost(x,y)){boostPressed=true;}
 });
 Platform.onMouseMove(canvas,(e)=>{if(joystick.active){const {x,y}=screenToCanvas(e.clientX,e.clientY);updateJoystickPos(x,y);}});
 Platform.onMouseUp(canvas,()=>{if(joystick.active)resetJoystick();attackPressed=false;});
@@ -1573,14 +1608,15 @@ Platform.onMouseLeave(canvas,()=>{if(joystick.active)resetJoystick();attackPress
 // ═══════════════════════════════════════
 Platform.onTouchStart(canvas,(e)=>{
     Platform.preventDefault(e);sound._c();
+    const tBtnSize=Math.max(S(54),44),tBtnY=S(26),tMuteX=Math.max(SX(40),12),tCloseM=Math.max(SX(150),75);
     for(const t of (Platform.getTouches(e)||[])){
         const {x,y}=screenToCanvas(t.clientX,t.clientY);
         // 新手引导点击关闭
         if(guideTimer>0){guideTimer=0;Platform.setItem('guide_shown','1');}
         // 手机端静音按钮
-        if(x>=30&&x<=84&&y>=22&&y<=76){soundEnabled=!soundEnabled;sound._enabled=soundEnabled;continue;}
+        if(x>=tMuteX&&x<=tMuteX+tBtnSize&&y>=tBtnY&&y<=tBtnY+tBtnSize){soundEnabled=!soundEnabled;sound._enabled=soundEnabled;continue;}
         // 手机端返回按钮
-        if(gameState!=='menu'&&x>=GAME_W-76&&x<=GAME_W-22&&y>=22&&y<=76){gameState='menu';continue;}
+        if(gameState!=='menu'&&x>=GAME_W-tCloseM&&x<=GAME_W-tCloseM+tBtnSize&&y>=tBtnY&&y<=tBtnY+tBtnSize){gameState='menu';continue;}
         if(gameState==='menu'){handleMenuClick(x,y);return;}
         if(gameState==='upgrade'){handleUpgradeClick(x,y);return;}
         if(gameState==='leaderboard'){handleLeaderboardClick(x,y);return;}
@@ -1588,6 +1624,7 @@ Platform.onTouchStart(canvas,(e)=>{
         if(gameState==='ended'&&y>GAME_H*0.07&&y<GAME_H*0.10){handleGameOverTabClick(x,y);}
         else if(gameState==='ended'||gameState==='champion'){handleGameOverBtnClick(x,y);}
         else if(isInAttack(x,y)){attackPressed=true;attackJustPressed=true;attackTouchId=t.identifier;}
+        else if(isInBoost(x,y)){boostPressed=true;}
     }
 });
 Platform.onTouchMove(canvas,(e)=>{Platform.preventDefault(e);for(const t of (Platform.getTouches(e)||[])){if(t.identifier===joystick.touchId){const {x,y}=screenToCanvas(t.clientX,t.clientY);updateJoystickPos(x,y);}}});
@@ -1605,12 +1642,12 @@ function buildMenu() {
 
     // ─── 多人对战 (4 buttons, 2×2) ───
     const col1x = cw * 0.19;
-    const btnW = 100, btnH = 30, gap = 8;
-    const row1y = ch * 0.23, row2y = ch * 0.30;
+    const btnW = S(130), btnH = Math.max(S(40), 38), gap = S(10);
+    const row1y = ch * 0.24, row2y = row1y + btnH + gap;
     let sx = col1x - (btnW + gap / 2);
-    menuBtns.push({ x:sx, y:row1y, w:btnW, h:btnH, text:'2v2 团队战', type:'mode', id:'2v2' });
+    menuBtns.push({ x:sx, y:row1y, w:btnW, h:btnH, text:'2v2团战', type:'mode', id:'2v2' });
     sx += btnW + gap;
-    menuBtns.push({ x:sx, y:row1y, w:btnW, h:btnH, text:'4v4 团队战', type:'mode', id:'4v4' });
+    menuBtns.push({ x:sx, y:row1y, w:btnW, h:btnH, text:'4v4团战', type:'mode', id:'4v4' });
     sx = col1x - (btnW + gap / 2);
     menuBtns.push({ x:sx, y:row2y, w:btnW, h:btnH, text:'2人组队', type:'mode', id:'team2' });
     sx += btnW + gap;
@@ -1618,22 +1655,29 @@ function buildMenu() {
 
     // ─── 生存竞技 (2 buttons, stacked) ───
     const col2x = cw * 0.50;
-    const survW = 130, survH = 34;
-    const survRow1y = ch * 0.23;
-    menuBtns.push({ x:col2x - survW/2, y:survRow1y, w:survW, h:survH, text:'单人吃鸡', type:'mode', id:'survival' });
-    menuBtns.push({ x:col2x - survW/2, y:survRow1y + survH + 10, w:survW, h:survH, text:'组队吃鸡', type:'mode', id:'duo_survival' });
+    const survW = S(170), survH = Math.max(S(42), 40);
+    const survRow1y = ch * 0.24;
+    menuBtns.push({ x:col2x - survW/2, y:survRow1y, w:survW, h:survH, text:'单人竞技', type:'mode', id:'survival' });
+    menuBtns.push({ x:col2x - survW/2, y:survRow1y + survH + Math.max(S(8), 6), w:survW, h:survH, text:'组队竞技', type:'mode', id:'duo_survival' });
 
     // ─── 休闲娱乐 (2 buttons, side by side) ───
     const col3x = cw * 0.81;
-    const casualRow1y = ch * 0.25;
+    const casualRow1y = ch * 0.24;
     sx = col3x - (btnW + gap / 2);
     menuBtns.push({ x:sx, y:casualRow1y, w:btnW, h:btnH, text:'大乱斗', type:'mode', id:'ffa' });
     sx += btnW + gap;
     menuBtns.push({ x:sx, y:casualRow1y, w:btnW, h:btnH, text:'训练场', type:'mode', id:'training' });
 
+    // ─── 计算模式按钮区域底部（用于后续定位） ───
+    MODE_BTN_BOTTOM = 0;
+    for (const btn of menuBtns) {
+        if (btn.type === 'mode') MODE_BTN_BOTTOM = Math.max(MODE_BTN_BOTTOM, btn.y + btn.h);
+    }
+
     // ─── 球型卡片 ───
-    const cardY = ch * 0.565;
-    const cardW = 180, cardH = 58, cardGap = 12;
+    const cardAreaTop = Math.max(ch * 0.54, MODE_BTN_BOTTOM + Math.max(S(56), 28));
+    const cardY = cardAreaTop + Math.max(S(28), 16);
+    const cardW = S(200), cardH = Math.max(S(64), 36), cardGap = S(14);
     const totalW = BALL_TYPES.length * cardW + (BALL_TYPES.length - 1) * cardGap;
     sx = (cw - totalW) / 2;
     for (const b of BALL_TYPES) {
@@ -1642,14 +1686,14 @@ function buildMenu() {
     }
 
     // ─── 开始按钮 ───
-    const startW = 180, startH = 48;
+    const startW = S(220), startH = Math.max(S(50), 42);
     menuBtns.push({ x:(cw-startW)/2, y:ch*0.835, w:startW, h:startH, text:'🎮 开始游戏', type:'start' });
     // ─── 通行证 XP 进度条 ───
-    const xpBarY = ch*0.515, xpBarW = cw*0.5, xpBarH = 10;
+    const xpBarY = Math.max(ch * 0.50, cardAreaTop - Math.max(S(30), 16)), xpBarW = cw*0.5, xpBarH = S(10);
     const xpX = cw/2 - xpBarW/2;
     ctx.fillStyle='rgba(255,255,255,0.06)';ctx.strokeStyle='rgba(255,255,255,0.1)';ctx.lineWidth=1;
     ctx.beginPath();ctx.roundRect(xpX-4,xpBarY-4,xpBarW+8,xpBarH+22,8);ctx.fill();ctx.stroke();
-    ctx.font='15px Arial';ctx.fillStyle='rgba(255,255,255,0.4)';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`${S(15)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.4)';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillText('声望 Lv.'+passLevel, cw/2, xpBarY+xpBarH+12);
     const xpNeeded = passLevel >= 50 ? 0 : 80 + passLevel * 20;
     if (xpNeeded > 0) {
@@ -1658,15 +1702,15 @@ function buildMenu() {
         const xpG=ctx.createLinearGradient(xpX,0,xpX+xpBarW,0);
         xpG.addColorStop(0,'#ff66ff');xpG.addColorStop(0.5,'#ffcc44');xpG.addColorStop(1,'#66ffcc');
         ctx.fillStyle=xpG;ctx.beginPath();ctx.roundRect(xpX,xpBarY,xpBarW*xpPct,xpBarH,5);ctx.fill();
-        ctx.font='14px Arial';ctx.fillStyle='rgba(255,255,255,0.5)';ctx.textAlign='center';
+        ctx.font=`${S(14)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.5)';ctx.textAlign='center';
         ctx.fillText(xp+'/'+xpNeeded, cw/2, xpBarY+xpBarH/2+1);
     } else {
-        ctx.font='bold 14px Arial';ctx.fillStyle='#ffcc44';ctx.textAlign='center';
+        ctx.font=`bold ${S(14)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ffcc44';ctx.textAlign='center';
         ctx.fillText('🏆 满级', cw/2, xpBarY+xpBarH/2+1);
     }
 
     // ─── 纹章选择 ───
-    const emY = ch*0.57, emSize = 28, emGap = 8;
+    const emY = ch*0.57, emSize = S(28), emGap = S(8);
     const emTotalW = EMBLEMS.length * (emSize + emGap) - emGap;
     let emX = cw/2 - emTotalW/2;
     for (const e of EMBLEMS) {
@@ -1676,20 +1720,20 @@ function buildMenu() {
         ctx.strokeStyle=active?'#ffcc44':(owned?'rgba(255,255,255,0.15)':'rgba(100,100,100,0.1)');
         ctx.lineWidth=active?2:1;
         ctx.beginPath();ctx.roundRect(emX,emY,emSize,emSize,6);ctx.fill();ctx.stroke();
-        ctx.font='24px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.font=`${S(24)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.fillStyle=owned?'#fff':'rgba(100,100,100,0.5)';
         const icon = {'flame':'🔥','lightning':'⚡','skull':'💀'}[e.id]||'❓';
         ctx.fillText(icon,emX+emSize/2,emY+emSize/2);
         // 小锁图标
-        if (!owned) {ctx.font='15px Arial';ctx.fillStyle='rgba(100,100,100,0.4)';ctx.fillText('🔒',emX+emSize/2,emY+emSize+10);}
+        if (!owned) {ctx.font=`${S(15)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(100,100,100,0.4)';ctx.fillText('🔒',emX+emSize/2,emY+emSize+10);}
         emX += emSize + emGap;
     }
 
     // ─── 升级按钮 ───
-    const upgW = 130, upgH = 38;
-    menuBtns.push({ x:20, y:ch*0.84, w:upgW, h:upgH, text:'🔧 升级', type:'upgrade' });
+    const upgW = S(150), upgH = S(42);
+    menuBtns.push({ x:40, y:ch*0.84, w:upgW, h:upgH, text:'升级', type:'upgrade' });
     // ─── 排行榜按钮 ───
-    menuBtns.push({ x:20, y:ch*0.84+upgH+10, w:upgW, h:upgH, text:'🏆 排行', type:'leaderboard' });
+    menuBtns.push({ x:40, y:ch*0.84+upgH+10, w:upgW, h:upgH, text:'排行', type:'leaderboard' });
 }
 
 function handleMenuClick(mx, my) {
@@ -1700,6 +1744,7 @@ function handleMenuClick(mx, my) {
             else if (btn.type === 'upgrade') { gameState = 'upgrade'; return; }
             else if (btn.type === 'leaderboard') { gameState = 'leaderboard'; return; }
             else if (btn.type === 'start') {
+                if (!selectedMode) selectedMode = '2v2';
                 if (menuTimer) { clearTimeout(menuTimer); menuTimer = null; }
                 scores = { red:0, blue:0 }; roundNum = 1; matchHistory = [];
                 initGame();
@@ -1716,49 +1761,50 @@ function drawMenu() {
 
 
     // ─── 标题 ───
-    ctx.font='bold 57px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`bold ${S(57)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillStyle='#ffcc44';
     ctx.shadowColor='#ffcc44';ctx.shadowBlur=20;
-    ctx.fillText('⚔️ 疯狂的珠子',cw/2,ch*0.08);
+    ctx.fillText('疯狂的珠子',cw/2,ch*0.07);
     ctx.shadowBlur=0;ctx.shadowColor='transparent';
 
-    // ─── 左上滚动公告 ───
+    // ─── 标题下方滚动公告 ───
     (function(){
-        const msgs=['🎯 欢迎来到疯狂弹珠！','🏆 连胜获得额外金币奖励！','🪃 回旋镖两白两黑新样式','💡 训练场可试用所有武器道具','⚔️ 拳击手套外观已上线','🔥 收集纹章彰显实力！'];
+        const msgs=['欢迎来到疯狂弹珠！','连胜获得额外金币奖励！','回旋镖两白两黑新样式','训练场可试用所有武器道具','拳击手套外观已上线','收集纹章彰显实力！'];
         const longText='  ★  '+msgs.join('  ★  ')+'  ★  ';
-        ctx.font='bold 20px Arial';
+        ctx.font=`bold ${S(18)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
         const tw=ctx.measureText(longText).width;
         const speed=35;
         const offset=(Date.now()/1000*speed)%tw;
+        const barW = cw * 0.55, barX = (cw - barW) / 2, barY = ch*0.13, barH = S(26);
         ctx.save();
         ctx.textAlign='left';ctx.textBaseline='middle';
-        ctx.beginPath();ctx.roundRect(30,16,580,28,8);ctx.clip();
+        ctx.beginPath();ctx.roundRect(barX,barY,barW,barH,8);ctx.clip();
         ctx.fillStyle='#ffcc44';ctx.shadowColor='#ffcc44';ctx.shadowBlur=6;
-        ctx.fillText(longText,30+580-offset,31);
-        ctx.fillText(longText,15+290-offset+tw,21);
+        ctx.fillText(longText,barX+barW-offset,barY+barH/2);
+        ctx.fillText(longText,barX+barW/2-offset+tw,barY+barH/2);
         ctx.shadowBlur=0;ctx.restore();
     })();
 
-    // ─── 金币余额 ───
-    ctx.font='bold 24px Arial';ctx.textAlign='right';ctx.textBaseline='middle';
+    // ─── 金币余额（内缩避开屏幕边缘）───
+    ctx.font=`bold ${S(22)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='right';ctx.textBaseline='middle';
     ctx.fillStyle='#ffcc44';
-    ctx.fillText(`💰 ${playerGold} 金币`, cw-20, 30);
+    ctx.fillText(`金币 ${playerGold}`, cw*0.92, S(30));
     if (winStreak > 1) {
-        ctx.font='21px Arial';ctx.fillStyle='#ff8844';
-        ctx.fillText(`🔥 ${winStreak} 连胜`, cw-20, 55);
+        ctx.font=`${S(19)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ff8844';
+        ctx.fillText(`连胜 ${winStreak}`, cw*0.92, S(54));
     }
     // 当前称号
     const curTitle = getActiveTitle();
     if (curTitle) {
-        ctx.font='bold 20px Arial';ctx.textAlign='right';ctx.textBaseline='middle';
+        ctx.font=`bold ${S(18)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='right';ctx.textBaseline='middle';
         ctx.fillStyle=curTitle.color;
-        ctx.fillText('「'+curTitle.text+'」', cw-20, 78);
+        ctx.fillText('「'+curTitle.text+'」', cw*0.92, S(76));
     }
 
     // ─── 模式分类卡片背景 ───
     const colCenters=[cw*0.19,cw*0.50,cw*0.81];
-    const cardTop=ch*0.13,cardBottom=ch*0.38;
-    const cardAreaW=210;
+    const cardTop=ch*0.16,cardBottom=Math.max(ch*0.40, MODE_BTN_BOTTOM + S(5));
+    const cardAreaW=S(320);
     for(let ci=0;ci<3;ci++){
         const cx=colCenters[ci];
         ctx.fillStyle='rgba(255,255,255,0.03)';
@@ -1770,18 +1816,18 @@ function drawMenu() {
     // ─── 分类标题 ───
     ctx.textAlign='center';ctx.textBaseline='middle';
     const headers=[
-        {text:'⚔️ 多人对战',x:colCenters[0],color:'#ffcc66'},
-        {text:'☣️ 生存竞技',x:colCenters[1],color:'#ff6688'},
-        {text:'🎮 休闲娱乐',x:colCenters[2],color:'#66ccff'},
+        {text:'多人对战',x:colCenters[0],color:'#ffcc66'},
+        {text:'生存竞技',x:colCenters[1],color:'#ff6688'},
+        {text:'休闲娱乐',x:colCenters[2],color:'#66ccff'},
     ];
     for(const h of headers){
-        ctx.font='bold 23px Arial';ctx.fillStyle=h.color;
-        ctx.fillText(h.text,h.x,ch*0.17);
+        ctx.font=`bold ${S(26)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle=h.color;
+        ctx.fillText(h.text,h.x,ch*0.20);
     }
 
     // ─── 按钮绘制 ───
     for(const btn of menuBtns){
-        if(btn.type==='start')continue;
+        if(btn.type==='start'||btn.type==='upgrade'||btn.type==='leaderboard')continue;
         const isMode=btn.type==='mode';
         const isBall=btn.type==='ball';
         const isSel=(isMode&&btn.id===selectedMode)||(isBall&&btn.id===selectedBallType);
@@ -1810,15 +1856,15 @@ function drawMenu() {
 
         // 球型卡片内容（名称 + 描述常驻）
         if(isBall){
-            ctx.font=isSel?'bold 21px Arial':'20px Arial';
+            ctx.font=isSel?`bold ${S(28)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`:`${S(26)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
             ctx.fillStyle=isSel?'#fff':'#bbb';
             ctx.textAlign='center';ctx.textBaseline='middle';
-            ctx.fillText(btn.text,btn.x+btn.w/2,btn.y+btn.h*0.38);
-            ctx.font='15px Arial';ctx.fillStyle='rgba(255,255,255,0.35)';
-            ctx.fillText(btn.desc,btn.x+btn.w/2,btn.y+btn.h*0.70);
+            ctx.fillText(btn.text,btn.x+btn.w/2,btn.y+btn.h*0.32);
+            ctx.font=`${S(15)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.35)';
+            ctx.fillText(btn.desc,btn.x+btn.w/2,btn.y+btn.h*0.74);
         }else{
             // 模式按钮文字
-            ctx.font=isSel?'bold 21px Arial':'20px Arial';
+            ctx.font=isSel?`bold ${S(28)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`:`${S(26)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
             ctx.fillStyle=isSel?'#fff':'#bbb';
             ctx.textAlign='center';ctx.textBaseline='middle';
             ctx.fillText(btn.text,btn.x+btn.w/2,btn.y+btn.h/2);
@@ -1826,7 +1872,7 @@ function drawMenu() {
     }
 
     // ─── 渐变分隔线 + 提示文字 ───
-    const sepY=ch*0.44;
+    const sepY = Math.max(ch * 0.44, MODE_BTN_BOTTOM + Math.max(S(10), 5));
     const grad=ctx.createLinearGradient(cw*0.1,0,cw*0.9,0);
     grad.addColorStop(0,'transparent');
     grad.addColorStop(0.3,'rgba(255,255,255,0.12)');
@@ -1834,11 +1880,11 @@ function drawMenu() {
     grad.addColorStop(1,'transparent');
     ctx.fillStyle=grad;
     ctx.fillRect(cw*0.1,sepY,cw*0.8,2);
-    ctx.font='20px Arial';ctx.fillStyle='rgba(255,255,255,0.3)';ctx.textAlign='center';ctx.textBaseline='middle';
-    ctx.fillText('— 选完模式，选择你的专属球型 —',cw/2,ch*0.49);
+    ctx.font=`${S(22)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.3)';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText('— 选完模式，选择你的专属球型 —',cw/2,Math.max(ch*0.49, sepY + Math.max(S(22), 10)));
 
     // ─── 球型区卡片背景 ───
-    const btCardTop=ch*0.54,btCardH=88,btCardW=cw-40;
+    const btCardTop = Math.max(ch * 0.54, MODE_BTN_BOTTOM + Math.max(S(40), 20)), btCardH = Math.max(S(88), 50), btCardW = cw - 40;
     ctx.fillStyle='rgba(255,255,255,0.03)';
     ctx.strokeStyle='rgba(255,255,255,0.06)';
     ctx.lineWidth=1;
@@ -1853,7 +1899,7 @@ function drawMenu() {
         ctx.shadowBlur=20;
         ctx.beginPath();ctx.roundRect(startBtn.x,startBtn.y,startBtn.w,startBtn.h,10);ctx.fill();
         ctx.shadowBlur=0;ctx.shadowColor='transparent';
-        ctx.font='bold 27px Arial';ctx.fillStyle='#fff';
+        ctx.font=`bold ${S(32)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#fff';
         ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.fillText(startBtn.text,startBtn.x+startBtn.w/2,startBtn.y+startBtn.h/2);
     }
@@ -1863,7 +1909,7 @@ function drawMenu() {
     if(upgBtn){
         ctx.fillStyle='rgba(255,200,80,0.15)';ctx.strokeStyle='rgba(255,200,80,0.4)';ctx.lineWidth=1.5;
         ctx.beginPath();ctx.roundRect(upgBtn.x,upgBtn.y,upgBtn.w,upgBtn.h,10);ctx.fill();ctx.stroke();
-        ctx.font='bold 23px Arial';ctx.fillStyle='#ffcc44';
+        ctx.font=`bold ${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ffcc44';
         ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.fillText(upgBtn.text,upgBtn.x+upgBtn.w/2,upgBtn.y+upgBtn.h/2);
     }
@@ -1872,7 +1918,7 @@ function drawMenu() {
     if(lbBtn){
         ctx.fillStyle='rgba(100,200,255,0.12)';ctx.strokeStyle='rgba(100,200,255,0.3)';ctx.lineWidth=1.5;
         ctx.beginPath();ctx.roundRect(lbBtn.x,lbBtn.y,lbBtn.w,lbBtn.h,10);ctx.fill();ctx.stroke();
-        ctx.font='21px Arial';ctx.fillStyle='#64c8ff';
+        ctx.font=`${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#64c8ff';
         ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.fillText(lbBtn.text,lbBtn.x+lbBtn.w/2,lbBtn.y+lbBtn.h/2);
     }
@@ -1886,13 +1932,13 @@ function drawMenu() {
     ctx.fillStyle='rgba(255,255,255,0.04)';ctx.strokeStyle='rgba(255,255,255,0.08)';ctx.lineWidth=1;
     ctx.beginPath();ctx.roundRect(rankX-160,rankY-20,170,70,10);ctx.fill();ctx.stroke();
     // 段位图标
-    ctx.font='42px Arial';ctx.textAlign='left';ctx.textBaseline='middle';
+    ctx.font=`${S(42)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='left';ctx.textBaseline='middle';
     ctx.fillText(tier.icon,rankX-148,rankY+8);
     // 段位名称
-    ctx.font='bold 24px Arial';ctx.fillStyle=tier.color;
+    ctx.font=`bold ${S(24)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle=tier.color;
     ctx.fillText(tier.name+' '+['I','II','III'][level-1],rankX-110,rankY);
     // RP
-    ctx.font='20px Arial';ctx.fillStyle='rgba(255,255,255,0.6)';
+    ctx.font=`${S(20)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.6)';
     ctx.fillText('RP '+rankPoints,rankX-110,rankY+22);
     // 进度条
     const pbX=rankX-148,pbY=rankY+36,pbW=136,pbH=4;
@@ -1903,17 +1949,17 @@ function drawMenu() {
     // 进度文字
     const nextName=TIERS[Math.min(tier.index+1,TIERS.length-1)].name;
     if(tier.index<TIERS.length-1){
-        ctx.font='14px Arial';ctx.fillStyle='rgba(255,255,255,0.3)';ctx.textAlign='right';
+        ctx.font=`${S(14)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.3)';ctx.textAlign='right';
         ctx.fillText('→ '+nextName,rankX-12,pbY+12);
     }
 
     // ─── 底部操作提示 ───
     if(isTouchDevice){
-        ctx.font='18px Arial';ctx.fillStyle='rgba(255,255,255,0.2)';
+        ctx.font=`${S(18)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.2)';
         ctx.textAlign='center';ctx.fillText('点击选择模式和球型，然后点开始游戏',cw/2,ch*0.94);
     }else{
-        ctx.font='18px Arial';ctx.fillStyle='rgba(255,255,255,0.2)';
-        ctx.textAlign='center';ctx.fillText('鼠标选择  |  WASD+Space 操作  |  方向键+Enter 双人',cw/2,ch*0.94);
+        ctx.font=`${S(18)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.2)';
+        ctx.textAlign='center';ctx.fillText('鼠标选择  |  WASD+Shift加速 操作  |  方向键+Enter 双人',cw/2,ch*0.94);
     }
 }
 
@@ -1973,13 +2019,13 @@ function drawUpgradeMenu() {
     UPGRADE_BTNS.length = 0;
 
     // 标题 + 金币
-    ctx.font='bold 48px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`bold ${S(48)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillStyle='#ffcc44';ctx.fillText('🔧 升级中心',cw/2,ch*0.08);
-    ctx.font='bold 27px Arial';ctx.textAlign='right';
-    ctx.fillStyle='#ffcc44';ctx.fillText(`💰 ${playerGold} 金币`,cw-20,30);
+    ctx.font=`bold ${S(27)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='right';
+    ctx.fillStyle='#ffcc44';ctx.fillText(`💰 ${playerGold} 金币`,cw-20,S(30));
 
     const keys = ['speed','attack','hp'];
-    const cardW = 220, cardH = 210, gap = 30;
+    const cardW = S(220), cardH = S(210), gap = S(30);
     const totalW = keys.length * cardW + (keys.length-1) * gap;
     let sx = (cw - totalW) / 2;
     const cardY = ch * 0.18;
@@ -1999,30 +2045,30 @@ function drawUpgradeMenu() {
         ctx.beginPath(); ctx.roundRect(sx, cardY, cardW, cardH, 14); ctx.fill(); ctx.stroke();
 
         // 图标
-        ctx.font='bold 63px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
-        ctx.fillText(info.icon, sx+cardW/2, cardY+45);
+        ctx.font=`bold ${S(63)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.fillText(info.icon, sx+cardW/2, cardY + S(32));
 
         // 名称
-        ctx.font='bold 24px Arial';ctx.fillStyle='#ffcc44';
-        ctx.fillText(info.name, sx+cardW/2, cardY+85);
+        ctx.font=`bold ${S(24)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ffcc44';
+        ctx.fillText(info.name, sx+cardW/2, cardY + S(68));
 
         // 等级
-        ctx.font='21px Arial';ctx.fillStyle= maxed ? '#ff8844' : '#64c8ff';
-        ctx.fillText(`Lv ${level}/${MAX_UPGRADE_LEVEL}`, sx+cardW/2, cardY+110);
+        ctx.font=`${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle= maxed ? '#ff8844' : '#64c8ff';
+        ctx.fillText(`Lv ${level}/${MAX_UPGRADE_LEVEL}`, sx+cardW/2, cardY + S(94));
 
         // 效果描述
-        ctx.font='20px Arial';ctx.fillStyle='rgba(255,255,255,0.5)';
-        ctx.fillText(effStr, sx+cardW/2, cardY+135);
+        ctx.font=`${S(20)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.5)';
+        ctx.fillText(effStr, sx+cardW/2, cardY + S(120));
 
         // 下一级预览
         if (!maxed) {
-            ctx.font='17px Arial';ctx.fillStyle='rgba(255,255,255,0.3)';
+            ctx.font=`${S(17)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.3)';
             const nextStr = key === 'speed' ? `+${nextEffect} 移速` : (key === 'attack' ? `+${Math.round(nextEffect*100)}% 伤害` : `+${nextEffect} 血量`);
-            ctx.fillText(`下一级: ${nextStr}`, sx+cardW/2, cardY+155);
+            ctx.fillText(`下一级: ${nextStr}`, sx+cardW/2, cardY + S(146));
         }
 
         // 购买按钮
-        const btnW=100, btnH=34, btnY=cardY+cardH-48;
+        const btnW=S(100), btnH=S(34), btnY=cardY+cardH-S(48);
         UPGRADE_BTNS.push({ x:sx+cardW/2-btnW/2, y:btnY, w:btnW, h:btnH, type:'buy', id:key });
 
         const canBuy = !maxed && playerGold >= cost;
@@ -2030,7 +2076,7 @@ function drawUpgradeMenu() {
         ctx.strokeStyle = maxed ? 'rgba(100,100,100,0.3)' : (canBuy ? 'rgba(255,200,80,0.6)' : 'rgba(255,200,80,0.2)');
         ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.roundRect(sx+cardW/2-btnW/2, btnY, btnW, btnH, 8); ctx.fill(); ctx.stroke();
-        ctx.font = 'bold 21px Arial'; ctx.fillStyle = maxed ? '#888' : (canBuy ? '#ffcc44' : 'rgba(255,200,80,0.4)');
+        ctx.font = `bold ${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`; ctx.fillStyle = maxed ? '#888' : (canBuy ? '#ffcc44' : 'rgba(255,200,80,0.4)');
         ctx.textAlign='center'; ctx.textBaseline='middle';
         ctx.fillText(maxed ? '已满级' : `💰 ${cost}`, sx+cardW/2, btnY+btnH/2);
 
@@ -2039,14 +2085,14 @@ function drawUpgradeMenu() {
 
     // 底部按钮行：返回 + 重置
     const btnRowY = ch*0.88;
-    const backW=160, backH=40, resetW=160;
+    const backW=S(160), backH=S(40), resetW=S(160);
     const totalBtnW = backW + 20 + resetW;
     const leftBtnX = cw/2 - totalBtnW/2;
     const rightBtnX = leftBtnX + backW + 20;
     UPGRADE_BTNS.push({ x:leftBtnX, y:btnRowY, w:backW, h:backH, type:'back' });
     ctx.fillStyle='rgba(255,255,255,0.08)'; ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1.5;
     ctx.beginPath(); ctx.roundRect(leftBtnX, btnRowY, backW, backH, 10); ctx.fill(); ctx.stroke();
-    ctx.font='24px Arial'; ctx.fillStyle='#ccc'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.font=`${S(24)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`; ctx.fillStyle='#ccc'; ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText('🔙 返回', leftBtnX+backW/2, btnRowY+backH/2);
 
     // 重置按钮
@@ -2060,13 +2106,13 @@ function drawUpgradeMenu() {
     }
     ctx.lineWidth=1.5;
     ctx.beginPath(); ctx.roundRect(rightBtnX, btnRowY, resetW, backH, 10); ctx.fill(); ctx.stroke();
-    ctx.font='bold 21px Arial';
+    ctx.font=`bold ${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
     ctx.fillStyle = !hasUpgrades ? '#666' : (resetConfirm ? '#ff6666' : 'rgba(255,200,80,0.6)');
     ctx.fillText(resetConfirm ? '❗ 确认重置?' : '🔄 重置升级', rightBtnX+resetW/2, btnRowY+backH/2);
 
     // 底部连胜显示
     if (bestStreak > 0) {
-        ctx.font='20px Arial';ctx.fillStyle='rgba(255,255,255,0.3)';ctx.textAlign='center';
+        ctx.font=`${S(20)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.3)';ctx.textAlign='center';
         ctx.fillText(`🏆 最高连胜: ${bestStreak}`, cw/2, ch*0.95);
     }
 }
@@ -2078,17 +2124,17 @@ function drawRoundEnd() {
     ctx.fillStyle='rgba(0,0,0,0.6)';ctx.fillRect(0,0,GAME_W,GAME_H);
     const cw=GAME_W,ch=GAME_H;
 
-    ctx.font='bold 48px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`bold ${S(48)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillStyle='#fff';ctx.fillText(`第 ${roundNum} 局结束`,cw/2,ch*0.15);
 
     // 大比分
-    ctx.font='bold 84px Arial';
+    ctx.font=`bold ${S(84)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
     ctx.textAlign='right';ctx.fillStyle='#ff8888';ctx.fillText(`🔴 ${scores.red}`,cw/2-30,ch*0.30);
     ctx.textAlign='center';ctx.fillStyle='#fff';ctx.fillText(':',cw/2,ch*0.30);
     ctx.textAlign='left';ctx.fillStyle='#88bbff';ctx.fillText(`${scores.blue} 🔵`,cw/2+30,ch*0.30);
 
     // 各球击杀
-    ctx.font='30px Arial';let y=ch*0.43;
+    ctx.font=`${S(30)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;let y=ch*0.43;
     for(const b of balls){
         const c=b.team==='red'?'#ff8888':(b.team==='blue'?'#88bbff':'#ddd');
         ctx.textAlign='center';ctx.fillStyle=c;
@@ -2096,7 +2142,7 @@ function drawRoundEnd() {
         y+=30;
     }
 
-    ctx.font='27px Arial';ctx.fillStyle='rgba(255,255,255,0.5)';
+    ctx.font=`${S(27)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.5)';
     ctx.textAlign='center';ctx.fillText('下一局即将开始...',cw/2,ch*0.72);
 }
 
@@ -2108,7 +2154,7 @@ function drawChampion() {
 
     let champ=scores.red>=WINS_NEEDED?'red':'blue';
     const tColor=champ==='red'?'#ff6666':'#66aaff';
-    ctx.font='bold 72px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`bold ${S(72)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.shadowColor=tColor;ctx.shadowBlur=30;
     ctx.fillStyle=tColor;
     ctx.fillText('🏆 '+(champ==='red'?'🔴 红队 总冠军！':'🔵 蓝队 总冠军！'),cw/2,ch*0.13);
@@ -2116,7 +2162,7 @@ function drawChampion() {
 
     ctx.fillStyle='rgba(255,255,255,0.05)';ctx.strokeStyle='rgba(255,255,255,0.1)';ctx.lineWidth=1;
     ctx.beginPath();ctx.roundRect(cw*0.3,ch*0.20,cw*0.4,44,10);ctx.fill();ctx.stroke();
-    ctx.font='bold 42px Arial';ctx.textAlign='right';ctx.fillStyle='#ff8888';
+    ctx.font=`bold ${S(42)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='right';ctx.fillStyle='#ff8888';
     ctx.fillText('🔴 '+scores.red,cw/2-8,ch*0.20+22);
     ctx.textAlign='center';ctx.fillStyle='#fff';ctx.fillText(':',cw/2,ch*0.20+22);
     ctx.textAlign='left';ctx.fillStyle='#88bbff';
@@ -2127,12 +2173,12 @@ function drawChampion() {
     if(mvp){
         ctx.fillStyle='rgba(255,200,80,0.08)';ctx.strokeStyle='rgba(255,200,80,0.3)';ctx.lineWidth=1;
         ctx.beginPath();ctx.roundRect(cw*0.28,ch*0.30,cw*0.44,30,8);ctx.fill();ctx.stroke();
-        ctx.font='24px Arial';ctx.fillStyle='#ffdd44';ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.font=`${S(24)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ffdd44';ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.fillText('⭐ MVP: '+mvp.name+' ('+mvk+' 击杀)',cw/2,ch*0.30+15);
     }
 
     const sorted=[...balls].sort((a,b)=>b.kills-a.kills);
-    ctx.font='21px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillStyle='rgba(255,255,255,0.4)';ctx.fillText('— 击杀榜 —',cw/2,ch*0.40);
     let y=ch*0.44;
     for(let i=0;i<sorted.length;i++){
@@ -2141,36 +2187,36 @@ function drawChampion() {
         ctx.fillStyle=i%2===0?'rgba(255,255,255,0.04)':'rgba(255,255,255,0.02)';
         ctx.strokeStyle='rgba(255,255,255,0.05)';ctx.lineWidth=0.5;
         ctx.beginPath();ctx.roundRect(cw*0.2,y-2,cw*0.6,26,6);ctx.fill();ctx.stroke();
-        ctx.textAlign='left';ctx.font=medal&&i<3?'26px Arial':'21px Arial';
+        ctx.textAlign='left';ctx.font=medal&&i<3?`${S(26)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`:`${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
         const c=b.team==='red'?'#ff8888':'#88bbff';
         ctx.fillStyle=c;ctx.fillText((medal?' '+medal:'')+' '+b.name,cw*0.23,(y+13));
-        ctx.textAlign='right';ctx.font='bold 21px Arial';ctx.fillStyle='#ff8844';
+        ctx.textAlign='right';ctx.font=`bold ${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ff8844';
         ctx.fillText(b.kills+' 击杀',cw*0.78,(y+13));
         y+=30;
     }
 
     ctx.fillStyle='rgba(255,200,80,0.06)';ctx.strokeStyle='rgba(255,200,80,0.2)';ctx.lineWidth=1;
     ctx.beginPath();ctx.roundRect(cw*0.25,ch*0.82,cw*0.5,winStreak>1?50:36,10);ctx.fill();ctx.stroke();
-    ctx.font='bold 23px Arial';ctx.fillStyle='#ffcc44';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`bold ${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ffcc44';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillText('💰 +'+earnedGold+' 金币  (累计: '+playerGold+')',cw/2,ch*0.82+18);
     if(winStreak>1){
-        ctx.font='21px Arial';ctx.fillStyle='#ff8844';
+        ctx.font=`${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ff8844';
         ctx.fillText('🔥 '+winStreak+' 连胜',cw/2,ch*0.82+36+10);
     }
 
-    const btnY=ch*0.92,btnW=160,btnH=40,btnGap=20;
+    const btnY=ch*0.92,btnW=S(160),btnH=S(40),btnGap=S(20);
     const btnsTotalW=btnW*2+btnGap;
     const btn1X=cw/2-btnsTotalW/2,btn2X=btn1X+btnW+btnGap;
     gameOverBtns.length=0;
     gameOverBtns.push({x:btn1X,y:btnY,w:btnW,h:btnH,type:'menu'});
     ctx.fillStyle='rgba(255,255,255,0.06)';ctx.strokeStyle='rgba(255,255,255,0.15)';ctx.lineWidth=1.5;
     ctx.beginPath();ctx.roundRect(btn1X,btnY,btnW,btnH,10);ctx.fill();ctx.stroke();
-    ctx.font='23px Arial';ctx.fillStyle='#ccc';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ccc';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillText('🏠 返回主页',btn1X+btnW/2,btnY+btnH/2);
     gameOverBtns.push({x:btn2X,y:btnY,w:btnW,h:btnH,type:'restart'});
     ctx.fillStyle='#ff6644';ctx.shadowColor='#ff6644';ctx.shadowBlur=15;
     ctx.beginPath();ctx.roundRect(btn2X,btnY,btnW,btnH,10);ctx.fill();ctx.shadowBlur=0;ctx.shadowColor='transparent';
-    ctx.font='bold 23px Arial';ctx.fillStyle='#fff';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`bold ${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#fff';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillText('🔄 继续游戏',btn2X+btnW/2,btnY+btnH/2);
 }function drawJoystick(){
     if(!isTouchDevice)return;
@@ -2188,25 +2234,53 @@ function drawAttackButton(){
     ctx.beginPath();ctx.arc(ATTACK_X,ATTACK_Y,ATTACK_RADIUS,0,Math.PI*2);
     ctx.fillStyle=p?'rgba(255,80,80,0.6)':'rgba(255,80,80,0.3)';ctx.fill();
     ctx.strokeStyle=p?'rgba(255,150,150,0.8)':'rgba(255,150,150,0.5)';ctx.lineWidth=3;ctx.stroke();
-    ctx.font='bold 27px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`bold ${S(27)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillStyle=p?'rgba(255,255,255,0.9)':'rgba(255,255,255,0.6)';ctx.fillText('⚔️',ATTACK_X,ATTACK_Y);
+}
+function drawBoostButton(){
+    if(!isTouchDevice||gameState==='menu')return;
+    const ready=boostCooldown<=0;
+    const active=balls.some(b=>b.isPlayer&&b.boostTimer>0);
+    ctx.beginPath();ctx.arc(BOOST_X,BOOST_Y,BOOST_RADIUS,0,Math.PI*2);
+    if(active){
+        ctx.fillStyle='rgba(80,255,80,0.5)';ctx.fill();
+        ctx.shadowColor='#44ff44';ctx.shadowBlur=18;
+        ctx.strokeStyle='rgba(150,255,150,0.9)';ctx.lineWidth=3;ctx.stroke();
+        ctx.shadowBlur=0;ctx.shadowColor='transparent';
+    }else if(ready){
+        ctx.fillStyle='rgba(80,255,80,0.25)';ctx.fill();
+        ctx.strokeStyle='rgba(150,255,150,0.5)';ctx.lineWidth=2;ctx.stroke();
+    }else{
+        ctx.fillStyle='rgba(100,100,100,0.3)';ctx.fill();
+        ctx.strokeStyle='rgba(150,150,150,0.3)';ctx.lineWidth=2;ctx.stroke();
+        // 冷却动画：圆弧倒计时
+        const pct=boostCooldown/BOOST_COOLDOWN;
+        ctx.beginPath();ctx.arc(BOOST_X,BOOST_Y,BOOST_RADIUS,-Math.PI/2,-Math.PI/2+pct*Math.PI*2);
+        ctx.strokeStyle='rgba(80,255,80,0.5)';ctx.lineWidth=3;ctx.stroke();
+    }
+    ctx.font=`bold ${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillStyle=active?'#fff':(ready?'rgba(255,255,255,0.8)':'rgba(200,200,200,0.4)');
+    ctx.fillText(active?'💨':'⚡',BOOST_X,BOOST_Y);
 }
 function drawMobileUI() {
     if (!isTouchDevice) return;
     if (gameState !== 'playing' && gameState !== 'countdown' && gameState !== 'menu') return;
-    // 静音按钮（左上角）
-    const bx=30,by=22,bw=54,bh=54;
+    const btnSize = Math.max(S(54), 44);
+    const btnY = S(26);
+    // 静音按钮（左上角，内移避开系统按钮）
+    const muteX = Math.max(SX(40), 12);
     ctx.fillStyle='rgba(0,0,0,0.4)';ctx.beginPath();
-    ctx.roundRect(bx,by,bw,bh,10);ctx.fill();
-    ctx.font='39px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle='#fff';
-    ctx.fillText(soundEnabled?'🔊':'🔇',bx+bw/2,by+bh/2);
-    // 返回菜单按钮（右上角，仅在游戏中显示）
+    ctx.roundRect(muteX,btnY,btnSize,btnSize,10);ctx.fill();
+    ctx.font=`${S(39)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle='#fff';
+    ctx.fillText(soundEnabled?'🔊':'🔇',muteX+btnSize/2,btnY+btnSize/2);
+    // 返回菜单按钮（右上角，内移避开系统按钮）
     if (gameState !== 'menu') {
-        const mx=GAME_W-76,my=22;
+        const closeMargin = Math.max(SX(150), 75);
+        const mx = GAME_W - closeMargin;
         ctx.fillStyle='rgba(0,0,0,0.4)';ctx.beginPath();
-        ctx.roundRect(mx,my,54,54,10);ctx.fill();
-        ctx.font='36px Arial';ctx.fillStyle='#fff';
-        ctx.fillText('✕',mx+27,my+27);
+        ctx.roundRect(mx,btnY,btnSize,btnSize,10);ctx.fill();
+        ctx.font=`${S(36)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#fff';
+        ctx.fillText('✕',mx+btnSize/2,btnY+btnSize/2);
     }
 }
 function drawGuide() {
@@ -2217,7 +2291,7 @@ function drawGuide() {
     const jy=JOYSTICK_Y,ax=ATTACK_X;
     // 摇杆引导（左侧箭头→）
     ctx.strokeStyle='#44ff88';ctx.fillStyle='#44ff88';ctx.lineWidth=4;
-    ctx.font='bold 36px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`bold ${S(36)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
     const jEnd=JOYSTICK_X-JOYSTICK_RADIUS-10;
     ctx.beginPath();ctx.moveTo(40,jy);ctx.lineTo(jEnd,jy);ctx.stroke();
     ctx.beginPath();ctx.moveTo(jEnd,jy);ctx.lineTo(jEnd-16,jy-10);ctx.lineTo(jEnd-16,jy+10);ctx.closePath();ctx.fill();
@@ -2228,7 +2302,7 @@ function drawGuide() {
     ctx.beginPath();ctx.moveTo(aEnd,jy);ctx.lineTo(aEnd+16,jy-10);ctx.lineTo(aEnd+16,jy+10);ctx.closePath();ctx.fill();
     ctx.fillText('攻击键 →',GAME_W-120,jy-24);
     // 顶部标题
-    ctx.font='bold 42px Arial';ctx.fillStyle='#ffcc44';ctx.fillText('👆 点击任意处关闭',GAME_W/2,JOYSTICK_Y-90);
+    ctx.font=`bold ${S(42)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ffcc44';ctx.fillText('👆 点击任意处关闭',GAME_W/2,JOYSTICK_Y-90);
     ctx.restore();
 }
 function drawArena() {
@@ -2240,7 +2314,7 @@ function drawArena() {
         ctx.fillStyle=grad;ctx.beginPath();ctx.arc(z.x,z.y,z.r,0,Math.PI*2);ctx.fill();
         const pulse=0.5+Math.sin(Date.now()/200)*0.3;
         ctx.strokeStyle=`rgba(100,255,100,${pulse})`;ctx.lineWidth=2;ctx.setLineDash([6,6]);ctx.stroke();ctx.setLineDash([]);
-        ctx.font='bold 20px Arial';ctx.fillStyle=`rgba(255,255,255,${pulse})`;ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.font=`bold ${S(20)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle=`rgba(255,255,255,${pulse})`;ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.fillText('💨 加速',z.x,z.y);
     }
     // 外圈
@@ -2253,6 +2327,7 @@ function drawArena() {
 function drawDrop(d){
     if(d.isTrainingDrop&&d.respawnTimer>0)return;
     const x=d.x,y=d.y;
+    const dScale = 1.3 * Math.sqrt(ARENA_RADIUS / 525);
     // 扩散光圈（武器红色 / 道具蓝色）
     const ringColor=d.type==='weapon'?'255,80,80':'80,150,255';
     const rn=Date.now();
@@ -2264,7 +2339,7 @@ function drawDrop(d){
     }
     ctx.save();
     ctx.lineWidth=1.5;ctx.strokeStyle='#222';
-    if(d.type==='weapon'){const w=d.data;ctx.translate(x,y);ctx.scale(2.0,2.0);
+    if(d.type==='weapon'){const w=d.data;ctx.translate(x,y);ctx.scale(dScale,dScale);
         const rotDrop=Date.now()/300;
         switch(w.id){
             case'single_gun':
@@ -2284,7 +2359,7 @@ function drawDrop(d){
                 ctx.fillStyle='#cc8844';ctx.fillRect(-5,-6,11,11);ctx.strokeRect(-5,-6,11,11);
                 ctx.strokeStyle='#996633';ctx.lineWidth=0.5;
                 ctx.beginPath();ctx.moveTo(0,-6);ctx.lineTo(0,5);ctx.moveTo(-5,-1);ctx.lineTo(6,-1);ctx.stroke();
-                ctx.fillStyle='#ff4444';ctx.font='bold 12px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('!',0,0);
+                ctx.fillStyle='#ff4444';ctx.font=`bold ${S(12)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('!',0,0);
                 ctx.strokeStyle='#222';ctx.lineWidth=1.5;break;
             case'dagger':
                 ctx.fillStyle='#d0d8e8';ctx.beginPath();ctx.moveTo(10,0);ctx.lineTo(-2,-4);ctx.lineTo(-2,4);ctx.closePath();ctx.fill();ctx.stroke();
@@ -2302,7 +2377,7 @@ function drawDrop(d){
                 ctx.fillStyle='#44ff88';ctx.beginPath();ctx.arc(6,0,4.5,0,Math.PI*2);ctx.fill();ctx.stroke();
                 ctx.fillStyle='#aaffcc';ctx.beginPath();ctx.arc(6,0,2.5,0,Math.PI*2);ctx.fill();
                 ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(5,-1,1,0,Math.PI*2);ctx.fill();
-                ctx.fillStyle='#44ff88';ctx.font='9px Arial';ctx.fillText('✦',8,-5);break;
+                ctx.fillStyle='#44ff88';ctx.font=`${S(9)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillText('✦',8,-5);break;
             case'laser_gun':
                 ctx.fillStyle='#778899';ctx.beginPath();ctx.moveTo(-2,0);ctx.lineTo(4,-3);ctx.lineTo(14,-3);ctx.lineTo(14,3);ctx.lineTo(4,3);ctx.closePath();ctx.fill();ctx.stroke();
                 ctx.fillStyle='#ff3344';ctx.fillRect(11,-2,5,4);ctx.strokeRect(11,-2,5,4);
@@ -2325,7 +2400,7 @@ function drawDrop(d){
                 ctx.fillStyle='#888';ctx.beginPath();ctx.arc(0,0,2,0,Math.PI*2);ctx.fill();ctx.stroke();
                 break;
         }
-    }else{const item=d.data;ctx.translate(x,y);ctx.scale(1.8,1.8);
+    }else{const item=d.data;ctx.translate(x,y);ctx.scale(dScale,dScale);
         ctx.lineWidth=1.5;ctx.strokeStyle='#222';
         switch(item.type){
             case'heal':{
@@ -2365,7 +2440,7 @@ function drawDrop(d){
                 ctx.fillStyle='#ddd';ctx.fillRect(-7,-7,3,4);ctx.strokeRect(-7,-7,3,4);
                 ctx.fillStyle='#ddd';ctx.fillRect(4,-7,3,4);ctx.strokeRect(4,-7,3,4);
                 // N/S labels
-                ctx.fillStyle='#222';ctx.font='bold 6px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+                ctx.fillStyle='#222';ctx.font=`bold ${S(6)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
                 ctx.fillText('N',-5.5,-5);ctx.fillText('S',5.5,-5);
                 ctx.lineWidth=1.5;break;
             }
@@ -2390,7 +2465,7 @@ function drawDrop(d){
                 for(let i=0;i<5;i++){const a=-Math.PI/2+i*2*Math.PI/5;const r=i%2===0?8:3.5;ctx.lineTo(Math.cos(a)*r,Math.sin(a)*r);}
                 ctx.closePath();ctx.fill();ctx.stroke();
                 // Evasion symbol
-                ctx.fillStyle='rgba(255,255,255,0.8)';ctx.font='bold 11px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+                ctx.fillStyle='rgba(255,255,255,0.8)';ctx.font=`bold ${S(11)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
                 ctx.fillText('↺',0,0);break;
             }
             case'slow':{
@@ -2402,7 +2477,7 @@ function drawDrop(d){
                 // Stem
                 ctx.strokeStyle='#5a3a1a';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(0,-6);ctx.lineTo(0,-9);ctx.stroke();
                 // Skull symbol
-                ctx.fillStyle='rgba(255,255,255,0.4)';ctx.font='bold 9px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+                ctx.fillStyle='rgba(255,255,255,0.4)';ctx.font=`bold ${S(9)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
                 ctx.fillText('☠',0,0);
                 // Poison drip
                 ctx.fillStyle=item.color;ctx.beginPath();ctx.arc(4,7,1.5,0,Math.PI*2);ctx.fill();ctx.stroke();
@@ -2418,7 +2493,7 @@ function checkPickups(){
     for(let i=drops.length-1;i>=0;i--){
         const d=drops[i];
         for(const b of balls){if(!b.isAlive)continue;
-            if(Math.sqrt(Math.pow(b.x-d.x,2)+Math.pow(b.y-d.y,2))<30){
+            if(Math.sqrt(Math.pow(b.x-d.x,2)+Math.pow(b.y-d.y,2))<SP(30)){
                 if(d.type==='weapon'){b.pickupWeapon(d.data);spawnPickupParticles(d.x,d.y,'#ffc832');}else{b.pickupItem(d.data);spawnPickupParticles(d.x,d.y,d.data.color||'#ffffff');}
                 sound.pickup();
                 if(d.isTrainingDrop){d.respawnTimer=1.5;d.x=-100;d.y=-100;}else{drops.splice(i,1);}
@@ -2434,26 +2509,19 @@ function checkPickups(){
 function drawHUD() {
     // 连胜显示（右上角，所有模式通用）
     if (winStreak > 1 && (gameState === 'playing' || gameState === 'countdown')) {
-        ctx.font='bold 21px Arial';ctx.textAlign='right';ctx.textBaseline='top';
+        ctx.font=`bold ${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='right';ctx.textBaseline='top';
         ctx.fillStyle='#ff8844';ctx.fillText(`🔥 ${winStreak} 连胜`, GAME_W-20, 10);
     }
 
-    // 诊断：显示 canvas 实际尺寸（调试用）
-    ctx.save();
-    ctx.font='12px Arial';ctx.textAlign='right';ctx.textBaseline='bottom';
-    ctx.fillStyle='rgba(255,255,255,0.2)';
-    ctx.fillText(`Canvas: ${canvas.width}×${canvas.height}  Game: ${GAME_W}×${GAME_H}`, GAME_W-10, GAME_H-10);
-    ctx.restore();
-
     if (selectedMode === 'training') {
-        ctx.fillStyle='#44ff88';ctx.font='bold 24px Arial';ctx.textAlign='right';
+        ctx.fillStyle='#44ff88';ctx.font=`bold ${S(24)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='right';
         ctx.fillText('🎯 训练场  |  [ESC] 返回',GAME_W-20,30);
-        ctx.textAlign='center';ctx.font='bold 60px Arial';ctx.fillStyle='#fff';
+        ctx.textAlign='center';ctx.font=`bold ${S(60)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#fff';
         ctx.fillText('∞',CENTER_X,50);
         return;
     }
     if (selectedMode === 'ffa') {
-        ctx.font='bold 24px Arial';
+        ctx.font=`bold ${S(24)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
         for(let i=0;i<balls.length;i++){
             const b=balls[i];
             const col = Math.floor(i / 4);
@@ -2468,14 +2536,14 @@ function drawHUD() {
                 ctx.fillRect(x,y+4,bw*(b.hp/b.maxHp),bh);
             }
         }
-        ctx.font='bold 60px Arial';ctx.textAlign='center';ctx.fillStyle='#fff';
+        ctx.font=`bold ${S(60)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.fillStyle='#fff';
         ctx.fillText(`${Math.ceil(gameTime)}`,CENTER_X,50);
         return;
     }
     if (selectedMode === 'survival') {
         // 存活人数
         let alive = 0; for (const b of balls) { if (b.isAlive) alive++; }
-        ctx.font='bold 27px Arial';ctx.textAlign='left';ctx.fillStyle='#fff';
+        ctx.font=`bold ${S(27)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='left';ctx.fillStyle='#fff';
         ctx.fillText(`👥 ${alive}/12 存活`, 20, 30);
         // 毒圈信息
         const phaseName = zoneState.phase < 0 ? '准备中' : ZONE_PHASES[zoneState.phase].label;
@@ -2492,10 +2560,10 @@ function drawHUD() {
             }
         }
         // 倒计时
-        ctx.font='bold 60px Arial';ctx.textAlign='center';ctx.fillStyle='#fff';
+        ctx.font=`bold ${S(60)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.fillStyle='#fff';
         ctx.fillText(`${Math.ceil(gameTime)}`,CENTER_X,50);
         // 底部提示
-        ctx.textAlign='left';ctx.font='20px Arial';ctx.fillStyle='rgba(255,255,255,0.35)';
+        ctx.textAlign='left';ctx.font=`${S(20)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.35)';
         if(isTouchDevice)ctx.fillText('生存吃鸡  |  摇杆移动 · 攻击',20,GAME_H-16);
         else ctx.fillText('生存吃鸡  |  WASD · Space/J攻击  |  [ESC]菜单  |  [M]静音',20,GAME_H-16);
         return;
@@ -2503,7 +2571,7 @@ function drawHUD() {
     if (selectedMode === 'duo_survival') {
         let alive = 0; const aliveTeams = new Set();
         for (const b of balls) { if (b.isAlive) { alive++; aliveTeams.add(b.team); } }
-        ctx.font='bold 27px Arial';ctx.textAlign='left';ctx.fillStyle='#fff';
+        ctx.font=`bold ${S(27)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='left';ctx.fillStyle='#fff';
         ctx.fillText(`👥 ${alive}/12  |  队伍 ${aliveTeams.size}/6`, 20, 30);
         if (zoneState.phase >= 0) {
             const phaseName = ZONE_PHASES[zoneState.phase].label;
@@ -2521,18 +2589,18 @@ function drawHUD() {
                 ctx.fillText(`⏱ 下次缩圈 ${Math.ceil(remain)}s`, 20, 80);
             }
         }
-        ctx.font='bold 60px Arial';ctx.textAlign='center';ctx.fillStyle='#fff';
+        ctx.font=`bold ${S(60)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.fillStyle='#fff';
         ctx.fillText(`${Math.ceil(gameTime)}`,CENTER_X,50);
-        ctx.textAlign='left';ctx.font='20px Arial';ctx.fillStyle='rgba(255,255,255,0.35)';
+        ctx.textAlign='left';ctx.font=`${S(20)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.35)';
         if(isTouchDevice)ctx.fillText('组队吃鸡  |  摇杆移动 · 攻击',20,GAME_H-16);
         else ctx.fillText('组队吃鸡  |  WASD · Space/J攻击  |  [ESC]菜单  |  [M]静音',20,GAME_H-16);
         return;
     }
     // 2v2 / 4v4
-    ctx.fillStyle='#fff';ctx.font='bold 60px Arial';ctx.textAlign='center';
+    ctx.fillStyle='#fff';ctx.font=`bold ${S(60)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';
     ctx.fillText(isOvertime?`⚡ ${Math.ceil(gameTime)}`:`${Math.ceil(gameTime)}`,CENTER_X,50);
 
-    ctx.font='bold 27px Arial';
+    ctx.font=`bold ${S(27)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
     let rHp=0,bHp=0;
     for(const b of balls){if(b.isAlive){if(b.team==='red')rHp+=b.hp;else bHp+=b.hp;}}
     ctx.textAlign='left';ctx.fillStyle='#ff8888';
@@ -2543,12 +2611,12 @@ function drawHUD() {
     // 回合数 & 大比分
     const isTeamMode = selectedMode === 'team2' || selectedMode === 'team4';
     const modeLabel = selectedMode === '4v4' || selectedMode === 'team4' ? '4v4' : (isTeamMode ? '组队' : '2v2');
-    ctx.font='21px Arial';ctx.textAlign='left';ctx.fillStyle='rgba(255,255,255,0.4)';
+    ctx.font=`${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='left';ctx.fillStyle='rgba(255,255,255,0.4)';
     const coopLabel = isTeamMode ? '🤝合作' : '';
     ctx.fillText(`${coopLabel}${modeLabel} 第 ${roundNum} 局  🔴 ${scores.red} : ${scores.blue} 🔵`,20,62);
 
     const hintLabel = isTeamMode ? `🤝组队${modeLabel}` : modeLabel;
-    ctx.textAlign='left';ctx.font='20px Arial';ctx.fillStyle='rgba(255,255,255,0.35)';
+    ctx.textAlign='left';ctx.font=`${S(20)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.35)';
     if(isTouchDevice)ctx.fillText(`${hintLabel}  |  摇杆移动 · 攻击`,20,GAME_H-16);
     else ctx.fillText(`${hintLabel}  |  WASD · Space/J  |  双人: 方向键+Enter  |  [ESC]菜单  |  [M]静音`,20,GAME_H-16);
 }
@@ -2556,13 +2624,13 @@ function drawHUD() {
 function handleGameOverTabClick(mx, my) {
     const cw=GAME_W,ch=GAME_H;
     const tabs=['全局击杀','团队击杀','个人收益'];
-    const tabW=130,tabGap=6;
+    const tabW=S(130),tabGap=S(6);
     const tabsW=tabs.length*tabW+(tabs.length-1)*tabGap;
     const sx=(cw-tabsW)/2;
     const tabY=ch*0.07;
     let tsx=sx;
     for(let i=0;i<tabs.length;i++){
-        if(mx>=tsx&&mx<=tsx+tabW&&my>=tabY&&my<=tabY+32){gameOverTab=i;return;}
+        if(mx>=tsx&&mx<=tsx+tabW&&my>=tabY&&my<=tabY+S(32)){gameOverTab=i;return;}
         tsx+=tabW+tabGap;
     }
 }
@@ -2590,9 +2658,9 @@ function drawCountdown() {
     if(t>2.4){text='3';tColor='#ff6666';stage=0;}else if(t>1.6){text='2';tColor='#ffaa44';stage=1;}else if(t>0.8){text='1';tColor='#44ddff';stage=2;}else{text='GO!';tColor='#44ff88';stage=3;}
     if(stage!==lastCountdownStage){sound.countdown();lastCountdownStage=stage;}
     ctx.fillStyle='rgba(0,0,0,0.4)';ctx.fillRect(CENTER_X-60,CENTER_Y-70,120,100);
-    ctx.font='bold 108px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle=tColor;
+    ctx.font=`bold ${S(108)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle=tColor;
     ctx.fillText(text,CENTER_X,CENTER_Y-20);
-    ctx.font='27px Arial';ctx.fillStyle='rgba(255,255,255,0.5)';ctx.textAlign='center';ctx.fillText('准备战斗！',CENTER_X,CENTER_Y+45);
+    ctx.font=`${S(27)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.5)';ctx.textAlign='center';ctx.fillText('准备战斗！',CENTER_X,CENTER_Y+45);
 }
 
 function drawGameOver() {
@@ -2607,11 +2675,11 @@ function drawGameOver() {
     const isTeam=selectedMode==='2v2'||selectedMode==='4v4'||selectedMode==='team2'||selectedMode==='team4';
 
     if(gameOverTab===0){
-        ctx.font='bold 23px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.font=`bold ${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.fillStyle='rgba(255,255,255,0.4)';
         ctx.fillText('— 击杀排行 —',cw/2,ch*0.15);
         let y=ch*0.20;
-        const rowH=30;
+        const rowH=S(30);
         for(let i=0;i<sorted.length;i++){
             const b=sorted[i];
             const medal=i===0?'🥇':(i===1?'🥈':(i===2?'🥉':''));
@@ -2619,10 +2687,10 @@ function drawGameOver() {
             ctx.strokeStyle='rgba(255,255,255,0.06)';ctx.lineWidth=0.5;
             const cardX=cw*0.12,cardW=cw*0.76;
             ctx.beginPath();ctx.roundRect(cardX,y,cardW,rowH,6);ctx.fill();ctx.stroke();
-            ctx.textAlign='left';ctx.font=i<3?'26px Arial':'23px Arial';
+            ctx.textAlign='left';ctx.font=i<3?`${S(26)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`:`${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
             ctx.fillStyle=b.isAlive?'#fff':'rgba(150,150,150,0.4)';
             ctx.fillText(medal+' '+b.name,cardX+8,y+rowH/2);
-            ctx.textAlign='right';ctx.font='bold 21px Arial';ctx.fillStyle='#ffcc44';
+            ctx.textAlign='right';ctx.font=`bold ${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ffcc44';
             ctx.fillText(b.kills+' 击杀',cardX+cardW-8,y+rowH/2);
             if(b.isAlive){
                 const bw=50,bh=3,barX=cw/2-bw/2;
@@ -2637,7 +2705,7 @@ function drawGameOver() {
             if(i===7&&sorted.length>8){ctx.fillStyle='rgba(255,255,255,0.3)';ctx.textAlign='center';ctx.fillText('...',cw/2,y);break;}
         }
     }else if(gameOverTab===1){
-        ctx.font='bold 23px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.font=`bold ${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.fillStyle='rgba(255,255,255,0.4)';
         if(isTeam){
             ctx.fillText('— 团队击杀 —',cw/2,ch*0.15);
@@ -2650,16 +2718,16 @@ function drawGameOver() {
                 const tB=team==='red'?'rgba(255,80,80,0.25)':'rgba(60,140,255,0.25)';
                 ctx.fillStyle=tC;ctx.strokeStyle=tB;ctx.lineWidth=1;
                 ctx.beginPath();ctx.roundRect(cw*0.15,y,cw*0.7,28,8);ctx.fill();ctx.stroke();
-                ctx.textAlign='left';ctx.font='bold 24px Arial';
+                ctx.textAlign='left';ctx.font=`bold ${S(24)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
                 ctx.fillStyle=team==='red'?'#ff8888':'#88bbff';
                 ctx.fillText(tName,cw*0.2,y+14);
-                ctx.textAlign='right';ctx.font='bold 23px Arial';ctx.fillStyle='#ffcc44';
+                ctx.textAlign='right';ctx.font=`bold ${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ffcc44';
                 ctx.fillText('总击杀 '+totalKills,cw*0.8,y+14);
                 y+=36;
                 for(const b of members){
                     ctx.fillStyle='rgba(255,255,255,0.03)';ctx.strokeStyle='rgba(255,255,255,0.05)';ctx.lineWidth=0.5;
                     ctx.beginPath();ctx.roundRect(cw*0.2,y,cw*0.6,24,6);ctx.fill();ctx.stroke();
-                    ctx.textAlign='left';ctx.font='21px Arial';
+                    ctx.textAlign='left';ctx.font=`${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
                     ctx.fillStyle=b.isAlive?'#ddd':'rgba(150,150,150,0.4)';
                     ctx.fillText('  '+b.name,cw*0.22,y+12);
                     ctx.textAlign='right';ctx.fillStyle='#ff8844';
@@ -2670,17 +2738,17 @@ function drawGameOver() {
             }
         }else{
             ctx.fillText('— 个人排行 —',cw/2,ch*0.15);
-            let y=ch*0.21;const rowH=30;
+            let y=ch*0.21;const rowH=S(30);
             for(let i=0;i<sorted.length;i++){
                 const b=sorted[i];
                 const medal=i===0?'🥇':(i===1?'🥈':(i===2?'🥉':''));
                 ctx.fillStyle=i%2===0?'rgba(255,255,255,0.05)':'rgba(255,255,255,0.02)';
                 ctx.strokeStyle='rgba(255,255,255,0.06)';ctx.lineWidth=0.5;
                 ctx.beginPath();ctx.roundRect(cw*0.12,y,cw*0.76,rowH,6);ctx.fill();ctx.stroke();
-                ctx.textAlign='left';ctx.font=i<3?'26px Arial':'21px Arial';
+                ctx.textAlign='left';ctx.font=i<3?`${S(26)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`:`${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
                 ctx.fillStyle=b.isAlive?'#fff':'rgba(150,150,150,0.4)';
                 ctx.fillText(medal+' '+b.name,cw*0.16,y+rowH/2);
-                ctx.textAlign='right';ctx.font='bold 21px Arial';ctx.fillStyle='#ffcc44';
+                ctx.textAlign='right';ctx.font=`bold ${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ffcc44';
                 ctx.fillText(b.kills+' 击杀',cw*0.84,y+rowH/2);
                 y+=rowH+4;if(i>8)break;
             }
@@ -2695,14 +2763,14 @@ function drawGameOver() {
         const streakGold=isWin?winStreak*5:0;
         const totalGold=baseGold+killGold+winGold+streakGold;
 
-        ctx.font='bold 23px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.font=`bold ${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.fillStyle='rgba(255,255,255,0.4)';ctx.fillText('— 个人战绩 —',cw/2,ch*0.15);
 
         ctx.fillStyle='rgba(255,255,255,0.04)';ctx.strokeStyle='rgba(255,255,255,0.08)';ctx.lineWidth=1;
         ctx.beginPath();ctx.roundRect(cw*0.15,ch*0.19,cw*0.7,36,10);ctx.fill();ctx.stroke();
-        ctx.font='bold 24px Arial';ctx.fillStyle=player?player.color:'#fff';ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.font=`bold ${S(24)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle=player?player.color:'#fff';ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.fillText(player?player.name:'???',cw*0.3,ch*0.19+18);
-        ctx.font='21px Arial';ctx.fillStyle='rgba(255,255,255,0.6)';
+        ctx.font=`${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.6)';
         ctx.fillText('排名 '+placement+'/'+balls.length,cw*0.5,ch*0.19+18);
         ctx.fillText('击杀 '+pk,cw*0.65,ch*0.19+18);
         ctx.fillStyle=player&&player.isAlive?'#44ff44':'#ff6666';
@@ -2711,11 +2779,11 @@ function drawGameOver() {
         const cardW=280,cardH=210,cardX=cw/2-cardW/2,cardY=ch*0.32;
         ctx.fillStyle='rgba(255,255,255,0.04)';ctx.strokeStyle='rgba(255,255,255,0.08)';ctx.lineWidth=1;
         ctx.beginPath();ctx.roundRect(cardX,cardY,cardW,cardH,12);ctx.fill();ctx.stroke();
-        ctx.font='bold 23px Arial';ctx.textAlign='center';ctx.fillStyle='#ffcc44';ctx.textBaseline='middle';
+        ctx.font=`bold ${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.fillStyle='#ffcc44';ctx.textBaseline='middle';
         ctx.fillText('💰 金币收益',cw/2,cardY+22);
         let gy=cardY+50;
         const lx=cardX+20,vx=cardX+cardW-20;
-        ctx.font='21px Arial';ctx.fillStyle='rgba(255,255,255,0.7)';
+        ctx.font=`${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.7)';
         ctx.textAlign='left';ctx.fillText('💰 基础参与',lx,gy);
         ctx.textAlign='right';ctx.fillStyle='#ffcc44';ctx.fillText('+'+baseGold,vx,gy);gy+=24;
         ctx.textAlign='left';ctx.fillStyle='rgba(255,255,255,0.7)';
@@ -2736,30 +2804,30 @@ function drawGameOver() {
         sep.addColorStop(0,'transparent');sep.addColorStop(0.3,'rgba(255,255,255,0.15)');
         sep.addColorStop(0.7,'rgba(255,255,255,0.15)');sep.addColorStop(1,'transparent');
         ctx.fillStyle=sep;ctx.fillRect(cardX+20,gy,cardW-40,1);gy+=16;
-        ctx.textAlign='left';ctx.font='bold 24px Arial';ctx.fillStyle='#ffcc44';
+        ctx.textAlign='left';ctx.font=`bold ${S(24)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ffcc44';
         ctx.fillText('本局获得',lx,gy);
         ctx.textAlign='right';ctx.fillText('+'+totalGold,vx,gy);gy+=24;
-        ctx.font='20px Arial';ctx.fillStyle='rgba(255,255,255,0.4)';
+        ctx.font=`${S(20)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='rgba(255,255,255,0.4)';
         ctx.textAlign='center';ctx.fillText('累计金币: '+playerGold,cw/2,gy+8);
         if(winStreak>1){
-            ctx.font='bold 23px Arial';ctx.fillStyle='#ff8844';ctx.textAlign='center';
+            ctx.font=`bold ${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ff8844';ctx.textAlign='center';
             ctx.fillText('🔥 '+winStreak+' 连胜',cw/2,cardY+cardH+22);
         }
     }
 
-    const btnY=ch*0.87,btnW=160,btnH=40,btnGap=20;
+    const btnY=ch*0.87,btnW=S(160),btnH=S(40),btnGap=S(20);
     const btnsTotalW=btnW*2+btnGap;
     const btn1X=cw/2-btnsTotalW/2,btn2X=btn1X+btnW+btnGap;
     gameOverBtns.length=0;
     gameOverBtns.push({x:btn1X,y:btnY,w:btnW,h:btnH,type:'menu'});
     ctx.fillStyle='rgba(255,255,255,0.06)';ctx.strokeStyle='rgba(255,255,255,0.15)';ctx.lineWidth=1.5;
     ctx.beginPath();ctx.roundRect(btn1X,btnY,btnW,btnH,10);ctx.fill();ctx.stroke();
-    ctx.font='23px Arial';ctx.fillStyle='#ccc';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ccc';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillText('🏠 返回主页',btn1X+btnW/2,btnY+btnH/2);
     gameOverBtns.push({x:btn2X,y:btnY,w:btnW,h:btnH,type:'restart'});
     ctx.fillStyle='#ff6644';ctx.shadowColor='#ff6644';ctx.shadowBlur=15;
     ctx.beginPath();ctx.roundRect(btn2X,btnY,btnW,btnH,10);ctx.fill();ctx.shadowBlur=0;ctx.shadowColor='transparent';
-    ctx.font='bold 23px Arial';ctx.fillStyle='#fff';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`bold ${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#fff';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillText('🔄 继续游戏',btn2X+btnW/2,btnY+btnH/2);
 }
 // ─── 排行榜系统 ───
@@ -2769,12 +2837,12 @@ function drawLeaderboard() {
     ctx.fillStyle='rgba(0,0,0,0.9)';ctx.fillRect(0,0,cw,ch);
     
     // 标题
-    ctx.font='bold 42px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`bold ${S(42)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillStyle='#ffcc44';ctx.fillText('🏆 排行榜',cw/2,ch*0.06);
     
     // 标签页
-    const tabs=['🇨🇳 国服','🏙️ 市区','👥 好友'];
-    const tabW=110,tabH=32,tabGap=8;
+    const tabs=['☆ 国服','◎ 市区','♥ 好友'];
+    const tabW=S(110),tabH=S(32),tabGap=S(8);
     const tabsW=tabs.length*tabW+(tabs.length-1)*tabGap;
     let sx=(cw-tabsW)/2;
     const tabY=ch*0.12;
@@ -2785,7 +2853,7 @@ function drawLeaderboard() {
         ctx.lineWidth=1;
         ctx.beginPath();ctx.roundRect(sx,tabY,tabW,tabH,8);ctx.fill();ctx.stroke();
         if(sel){ctx.fillStyle='#64c8ff';ctx.beginPath();ctx.roundRect(sx+15,tabY+tabH-3,tabW-30,3,2);ctx.fill();}
-        ctx.font=sel?'bold 21px Arial':'20px Arial';
+        ctx.font=sel?`bold ${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`:`${S(20)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
         ctx.fillStyle=sel?'#64c8ff':'rgba(255,255,255,0.4)';
         ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.fillText(tabs[i],sx+tabW/2,tabY+tabH/2);
@@ -2803,7 +2871,7 @@ function drawLeaderboard() {
     
     // 表头
     const listY=ch*0.20;
-    ctx.font='18px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`${S(18)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillStyle='rgba(255,255,255,0.3)';
     ctx.fillText('排名',cw*0.08,listY-6);
     ctx.fillText('玩家',cw*0.25,listY-6);
@@ -2816,7 +2884,7 @@ function drawLeaderboard() {
     ctx.fillRect(cw*0.06,listY+4,cw*0.88,1);
     
     let y=listY+14;
-    const rowH=28;
+    const rowH=S(28);
     const displayCount=Math.min(filtered.length,40);
     for(let i=0;i<displayCount;i++){
         const n=filtered[i];
@@ -2836,27 +2904,27 @@ function drawLeaderboard() {
         }
         
         // 排名
-        ctx.textAlign='center';ctx.font=medal?'24px Arial':'21px Arial';
+        ctx.textAlign='center';ctx.font=medal?`${S(24)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`:`${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
         ctx.fillStyle=medal?'#fff':'rgba(255,255,255,0.5)';
         ctx.fillText(medal||rank,cw*0.08,y+rowH/2);
         
         // 名字
-        ctx.textAlign='left';ctx.font=n.isPlayer?'bold 21px Arial':'21px Arial';
+        ctx.textAlign='left';ctx.font=n.isPlayer?`bold ${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`:`${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
         ctx.fillStyle=n.isPlayer?'#64c8ff':'rgba(255,255,255,0.8)';
         ctx.fillText(n.name,cw*0.14,y+rowH/2);
         
         // 段位
-        ctx.textAlign='center';ctx.font='20px Arial';
+        ctx.textAlign='center';ctx.font=`${S(20)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
         ctx.fillStyle=t.color;
         ctx.fillText(t.icon+' '+t.name+' '+lv,cw*0.50,y+rowH/2);
         
         // RP
-        ctx.textAlign='center';ctx.font='bold 21px Arial';
+        ctx.textAlign='center';ctx.font=`bold ${S(21)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
         ctx.fillStyle='#ffcc44';
         ctx.fillText(n.rp,cw*0.68,y+rowH/2);
         
         // 胜场
-        ctx.textAlign='center';ctx.font='20px Arial';
+        ctx.textAlign='center';ctx.font=`${S(20)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
         ctx.fillStyle='rgba(255,255,255,0.5)';
         ctx.fillText(n.wins+'/'+n.matches,cw*0.85,y+rowH/2);
         
@@ -2864,17 +2932,17 @@ function drawLeaderboard() {
     }
     
     // 返回按钮
-    const btnY=ch*0.92,btnW=160,btnH=40;
+    const btnY=ch*0.92,btnW=S(160),btnH=S(40);
     ctx.fillStyle='rgba(255,255,255,0.06)';ctx.strokeStyle='rgba(255,255,255,0.15)';ctx.lineWidth=1.5;
     ctx.beginPath();ctx.roundRect(cw/2-btnW/2,btnY,btnW,btnH,10);ctx.fill();ctx.stroke();
-    ctx.font='23px Arial';ctx.fillStyle='#ccc';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`${S(23)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.fillStyle='#ccc';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillText('🔙 返回主菜单',cw/2,btnY+btnH/2);
 }
 function handleLeaderboardClick(mx,my){
     const cw=GAME_W,ch=GAME_H;
     // 标签页
-    const tabs=['🇨🇳 国服','🏙️ 市区','👥 好友'];
-    const tabW=110,tabH=32,tabGap=8;
+    const tabs=['☆ 国服','◎ 市区','♥ 好友'];
+    const tabW=S(110),tabH=S(32),tabGap=S(8);
     const tabsW=tabs.length*tabW+(tabs.length-1)*tabGap;
     let sx=(cw-tabsW)/2;
     for(let i=0;i<tabs.length;i++){
@@ -2882,7 +2950,7 @@ function handleLeaderboardClick(mx,my){
         sx+=tabW+tabGap;
     }
     // 返回按钮
-    const btnW=160,btnH=40,btnY=ch*0.92;
+    const btnW=S(160),btnH=S(40),btnY=ch*0.92;
     if(mx>=cw/2-btnW/2&&mx<=cw/2+btnW/2&&my>=btnY&&my<=btnY+btnH){gameState='menu';}
 }
 
@@ -2925,7 +2993,7 @@ function updateSurvivalZone(dt) {
         // 设置下一阶段的缩圈目标
         const nextTarget = nextPhase + 1;
         if (nextTarget < ZONE_PHASES.length) {
-            zoneState.targetRadius = ZONE_PHASES[nextTarget].radius;
+            zoneState.targetRadius = SP(ZONE_PHASES[nextTarget].radius);
             // 在当前圈内随机选一个中心点
             const maxDist = Math.max(0, zoneState.startRadius - zoneState.targetRadius - 15);
             if (maxDist > 5) {
@@ -3027,7 +3095,7 @@ function drawSurvivalZone() {
             ctx.lineWidth = 2;
             ctx.stroke();
             ctx.setLineDash([]);
-            ctx.font = 'bold 24px Arial';
+            ctx.font = `bold ${S(24)}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;
             ctx.textAlign = 'center';
             const textY = Math.max(30, ty - nr - 20);
             ctx.fillStyle = `rgba(255,100,100,${0.5 + Math.sin(Date.now()/150)*0.5})`;
@@ -3162,7 +3230,7 @@ function gameLoop(time) {
 
     // 清屏
     ctx.fillStyle = '#1a1a2e';
-    ctx.fillRect(0, 0, GAME_W, GAME_H);
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // ▸ 主菜单
     if (gameState === 'menu') {
@@ -3202,12 +3270,22 @@ function gameLoop(time) {
 
     // 游戏进行中
     if (gameState === 'playing') {
+        // 加速键处理
+        if (boostPressed && boostCooldown <= 0) {
+            for (const b of balls) {
+                if (b.isPlayer || b.isPlayer2) b.boostTimer = BOOST_DURATION;
+            }
+            boostCooldown = BOOST_COOLDOWN;
+        }
+        boostPressed = false;
+        if (boostCooldown > 0) boostCooldown -= dt;
+
         gameTime -= dt;
         if (gameTime <= 0) {
             if (!isOvertime) {
                 const w = checkWinner();
                 if (w) endGame(w);
-                else { isOvertime=true; gameTime=30; for(const b of balls) b.speed=220; }
+                else { isOvertime=true; gameTime=30; for(const b of balls) b.speed=SP(220); }
             } else {
                 endGame(checkWinner()||'draw');
             }
@@ -3222,10 +3300,10 @@ function gameLoop(time) {
                 const streak = b.kills;
                 const colors = {1:'#ffdd44',2:'#ffdd44',3:'#ff8800',4:'#ff8800',5:'#ff4444'};
                 killNotifications.push({
-                    x:b.x, y:b.y-30,
+                    x:b.x, y:b.y-SP(30),
                     text:`击杀×${streak}`,
                     color:colors[Math.min(streak,5)]||'#ff4444',
-                    timer:1.5, maxTimer:1.5, size:20+Math.min(streak,5)*2
+                    timer:1.5, maxTimer:1.5, size:SP(20)+Math.min(streak,5)*2
                 });
                 b._prevKills = b.kills;
             }
@@ -3341,7 +3419,7 @@ function gameLoop(time) {
         const a=Math.max(0,kn.timer/kn.maxTimer);
         const yOff=(1-a)*50;
         ctx.globalAlpha=Math.min(1,a*2);
-        ctx.font=`bold ${kn.size}px Arial`;ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.font=`bold ${kn.size}px Arial,"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji"`;ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.strokeStyle='#000';ctx.lineWidth=3;
         ctx.strokeText(kn.text,kn.x,kn.y-yOff);
         ctx.fillStyle=kn.color;ctx.fillText(kn.text,kn.x,kn.y-yOff);
@@ -3356,6 +3434,7 @@ function gameLoop(time) {
     drawGuide();
     drawJoystick();
     drawAttackButton();
+    drawBoostButton();
     drawMobileUI();
 
     if (gameState === 'roundEnd') drawRoundEnd();

@@ -4,17 +4,14 @@
 // ═══════════════════════════════════════
 const canvas = tt.createCanvas();
 const sysInfo = tt.getSystemInfoSync();
-const LOGICAL_W = 1920, LOGICAL_H = 1080;
-const SCALE_X = sysInfo.windowWidth / LOGICAL_W;
-const SCALE_Y = sysInfo.windowHeight / LOGICAL_H;
 
 globalThis.Platform = {
     name: 'douyin',
 
-    // ─── Canvas（固定 1920×1080，运行时自动拉伸到全屏） ───
+    // ─── Canvas（尺寸匹配屏幕 CSS 像素，1:1 映射） ───
     createCanvas() {
-        canvas.width = 1920;
-        canvas.height = 1080;
+        canvas.width = Math.min(sysInfo.windowWidth, 1920);
+        canvas.height = Math.min(sysInfo.windowHeight, 1080);
         return canvas;
     },
     getContext(c) { return c.getContext('2d'); },
@@ -26,9 +23,9 @@ globalThis.Platform = {
     // ─── 触摸检测 ───
     isTouchDevice() { return true; },
 
-    // ─── 坐标转换（触屏坐标 = 画布像素坐标，缩放到逻辑坐标系） ───
+    // ─── 坐标转换（canvas 尺寸 = 屏幕 CSS 像素尺寸，1:1 映射） ───
     canvasToLogical(c, cx, cy) {
-        return { x: cx * (1920 / c.width), y: cy * (1080 / c.height) };
+        return { x: cx, y: cy };
     },
 
     // ─── 事件监听 ───
@@ -51,8 +48,20 @@ globalThis.Platform = {
     onTouchCancel(c, cb) {
         tt.onTouchCancel(() => cb({ changedTouches: [] }));
     },
-    onResize(cb) { tt.onWindowResize ? tt.onWindowResize(cb) : null; },
-    onOrientationChange(cb) { tt.onWindowResize ? tt.onWindowResize(cb) : null; },
+    onResize(cb) {
+        tt.onWindowResize ? tt.onWindowResize((res) => {
+            canvas.width = Math.min(res.windowWidth, 1920);
+            canvas.height = Math.min(res.windowHeight, 1080);
+            if (cb) cb();
+        }) : null;
+    },
+    onOrientationChange(cb) {
+        tt.onWindowResize ? tt.onWindowResize((res) => {
+            canvas.width = Math.min(res.windowWidth, 1920);
+            canvas.height = Math.min(res.windowHeight, 1080);
+            if (cb) cb();
+        }) : null;
+    },
 
     // ─── 事件数据提取 ───
     getMousePos() { return null; },
@@ -71,7 +80,9 @@ globalThis.Platform = {
 
     // ─── 屏幕尺寸刷新（横竖屏切换时） ───
     refreshScreenSize() {
-        // canvas 固定 1920×1080，无需调整
+        const info = tt.getSystemInfoSync();
+        canvas.width = Math.min(info.windowWidth, 1920);
+        canvas.height = Math.min(info.windowHeight, 1080);
     },
 
     // ─── 本地存储 ───

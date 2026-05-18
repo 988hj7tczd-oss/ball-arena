@@ -40,7 +40,7 @@
     }
   },
   "compileType": "game",
-  "libVersion": "3.16.0",
+  "libVersion": "3.15.1",
   "projectname": "ball-arena-wechat",
   "packOptions": {
     "ignore": [],
